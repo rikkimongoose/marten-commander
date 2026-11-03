@@ -1,4 +1,4 @@
-module changeme
+module github.com/rikkimongoose/marten-commander
 
 go 1.26.0
 

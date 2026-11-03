@@ -42,6 +42,7 @@ type FileEntry struct {
 	Size       int64 // Provider-reported size; only regular file sizes are comparable.
 	ModifiedAt time.Time
 	Mode       fs.FileMode
+	Hidden     bool
 }
 
 // FileSystem is the minimum read contract. Writing and watching are separate
@@ -62,4 +63,10 @@ type FileSystem interface {
 // contents, possibly relative or dangling; callers must not silently resolve it.
 type LinkReader interface {
 	Readlink(ctx context.Context, path string) (string, error)
+}
+
+// PathResolver is an optional capability for explicit navigation through links.
+// Resolving a path must preserve the meaning of symlink/.. components.
+type PathResolver interface {
+	ResolvePath(ctx context.Context, path string) (string, error)
 }

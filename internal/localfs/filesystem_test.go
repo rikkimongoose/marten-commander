@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"changeme/internal/core"
-	"changeme/internal/localfs"
+	"github.com/rikkimongoose/marten-commander/internal/core"
+	"github.com/rikkimongoose/marten-commander/internal/localfs"
 )
 
 func writeFile(t *testing.T, path, contents string) {
@@ -284,6 +284,10 @@ func TestContextAndPathValidation(t *testing.T) {
 		},
 		"Readlink": func(ctx context.Context, path string) error {
 			_, err := filesystem.Readlink(ctx, path)
+			return err
+		},
+		"ResolvePath": func(ctx context.Context, path string) error {
+			_, err := filesystem.ResolvePath(ctx, path)
 			return err
 		},
 	}

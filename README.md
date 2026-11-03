@@ -1,59 +1,77 @@
-# Welcome to Your New Wails3 Project!
+# Marten Commander
 
-Congratulations on generating your Wails3 application! This README will guide you through the next steps to get your project up and running.
+Двухпанельный файловый менеджер на Go, Wails 3, React, MUI и AG Grid.
+Реализованы шаги 1–3 MVP: чтение локальных каталогов и независимые файловые панели.
 
-## Getting Started
+## Возможности текущего этапа
 
-1. Navigate to your project directory in the terminal.
+- Обе панели начинают с домашнего каталога и независимо переходят по файловой системе.
+- Переход по абсолютному пути, двойному щелчку или Enter; Backspace — к родителю.
+- Имена, расширения, типы, размеры и время изменения; сортировка кликом по заголовку.
+- Каталоги и доступные ссылки на каталоги всегда впереди, включая обратную сортировку.
+- Независимый переключатель скрытых файлов и множественное выделение Ctrl/Cmd/Shift.
+- Ручное обновление кнопкой или Ctrl/Cmd+R в таблице, сохранение доступных выбранных
+  записей, текущего элемента и верхней строки при обновлении того же каталога.
+- Защита от устаревших ответов; ошибка оставляет последний успешный снимок.
 
-2. To run your application in development mode, use the following command:
+Наблюдение за каталогами, копирование, удаление, перемещение, внешний редактор,
+просмотр файлов и сохранение настроек ещё не реализованы. Изменения файловой
+системы появляются после ручного обновления.
 
-   ```
-   wails3 dev
-   ```
+## Разработка и сборка
 
-   This will start your application and enable hot-reloading for both frontend and backend changes.
+Используются Go 1.26 или новее, Wails CLI 3.0.0, Node.js 22.18 или новее и npm.
+Версии frontend-зависимостей закреплены в `frontend/package-lock.json`.
+Linux-сборке нужны C-компилятор, pkg-config, GTK4 и WebKitGTK 6.0 с development-файлами.
+Для запуска GUI нужна графическая сессия.
 
-3. To build your application for production, use:
+```sh
+cd frontend
+npm ci
+cd ..
+wails3 dev
+```
 
-   ```
-   wails3 build
-   ```
+Стандартная сборка через существующий Taskfile:
 
-   This will create a production-ready executable in the `build` directory.
+```sh
+wails3 build
+```
 
-## Exploring Wails3 Features
+Результат Linux-сборки — `bin/marten-commander`. Для явной проверки без задач,
+обновляющих зависимости и иконки, можно использовать:
 
-Now that you have your project set up, it's time to explore the features that Wails3 offers:
+```sh
+wails3 generate bindings -ts -i
+cd frontend
+npm run build
+cd ..
+go build -mod=readonly -tags production -buildvcs=false -o bin/marten-commander .
+```
 
-1. **Check out the examples**: The best way to learn is by example. Visit the `examples` directory in the `v3/examples` directory to see various sample applications.
+Bindings генерируются автоматически; вручную их редактировать не нужно.
 
-2. **Run an example**: To run any of the examples, navigate to the example's directory and use:
+## Тесты
 
-   ```
-   go run .
-   ```
+```sh
+go test -race -cover ./internal/...
+go vet ./internal/...
+cd frontend
+npm test
+npm run build
+```
 
-   Note: Some examples may be under development during the alpha phase.
+Go-тесты внутренних пакетов работают независимо от Wails и GUI. Frontend-тесты
+используют встроенный Node.js test runner. Проверки в браузере не заменяют
+проверку клавиатуры и фокуса в нативном webview.
 
-3. **Explore the documentation**: Visit the [Wails3 documentation](https://v3.wails.io/) for in-depth guides and API references.
+## Ограничения
 
-4. **Join the community**: Have questions or want to share your progress? Join the [Wails Discord](https://discord.gg/JDdSxwjhGf) or visit the [Wails discussions on GitHub](https://github.com/wailsapp/wails/discussions).
+Переход по ссылке открывает её физический путь. Необычные имена отображаются
+с экранированием; переходы по записям используют отдельные обратимые идентификаторы.
+В поле пути вводится обычный абсолютный путь ОС, без escape-последовательностей.
+Невалидный UTF-8 нельзя набрать в текстовом поле, но такие каталоги доступны
+через родительскую панель на Linux. При скрытии строки её выделение снимается.
+Отмена не может гарантированно прервать заблокированный системный вызов.
 
-## Project Structure
-
-Take a moment to familiarize yourself with your project structure:
-
-- `frontend/`: Contains your frontend code (HTML, CSS, JavaScript/TypeScript)
-- `main.go`: The entry point of your Go backend
-- `app.go`: Define your application structure and methods here
-- `wails.json`: Configuration file for your Wails project
-
-## Next Steps
-
-1. Modify the frontend in the `frontend/` directory to create your desired UI.
-2. Add backend functionality in `main.go`.
-3. Use `wails3 dev` to see your changes in real-time.
-4. When ready, build your application with `wails3 build`.
-
-Happy coding with Wails3! If you encounter any issues or have questions, don't hesitate to consult the documentation or reach out to the Wails community.
+Подробные решения, контракты и ограничения: [docs/architecture.md](docs/architecture.md).

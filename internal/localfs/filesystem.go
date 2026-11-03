@@ -10,7 +10,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"changeme/internal/core"
+	"github.com/rikkimongoose/marten-commander/internal/core"
 )
 
 // LocalFileSystem reads absolute host-native paths. Its zero value is ready to
@@ -18,8 +18,9 @@ import (
 type LocalFileSystem struct{}
 
 var (
-	_ core.FileSystem = LocalFileSystem{}
-	_ core.LinkReader = LocalFileSystem{}
+	_ core.FileSystem   = LocalFileSystem{}
+	_ core.LinkReader   = LocalFileSystem{}
+	_ core.PathResolver = LocalFileSystem{}
 )
 
 // ReadDir follows a directory symlink to allow navigation, but never follows the
@@ -101,6 +102,20 @@ func (LocalFileSystem) Readlink(ctx context.Context, path string) (string, error
 	return target, nil
 }
 
+func (LocalFileSystem) ResolvePath(ctx context.Context, path string) (string, error) {
+	if err := check(ctx, "resolve", path); err != nil {
+		return "", err
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", err
+	}
+	if err := check(ctx, "resolve", path); err != nil {
+		return "", err
+	}
+	return resolved, nil
+}
+
 func entry(path string, info fs.FileInfo) core.FileEntry {
 	return core.FileEntry{
 		Path:       path,
@@ -109,6 +124,7 @@ func entry(path string, info fs.FileInfo) core.FileEntry {
 		Size:       info.Size(),
 		ModifiedAt: info.ModTime(),
 		Mode:       info.Mode(),
+		Hidden:     isHidden(info),
 	}
 }
 

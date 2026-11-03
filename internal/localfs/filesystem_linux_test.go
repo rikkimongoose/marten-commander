@@ -9,8 +9,8 @@ import (
 	"syscall"
 	"testing"
 
-	"changeme/internal/core"
-	"changeme/internal/localfs"
+	"github.com/rikkimongoose/marten-commander/internal/core"
+	"github.com/rikkimongoose/marten-commander/internal/localfs"
 )
 
 func TestNonUTF8Names(t *testing.T) {
