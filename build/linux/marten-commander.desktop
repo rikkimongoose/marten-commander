@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=marten-commander
+Exec=marten-commander
+Icon=marten-commander
+Categories=Development;
+Terminal=false
+Keywords=wails
+Version=1.0
+StartupNotify=false
