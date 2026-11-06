@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { Alert, Box, Button, Checkbox, FormControlLabel, LinearProgress, TextField, Typography } from "@mui/material";
 import { AgGridReact } from "ag-grid-react";
 import type { ColDef, GridApi, RowSelectionOptions } from "ag-grid-community";
@@ -6,6 +6,7 @@ import { ReadDirectory } from "../bindings/github.com/rikkimongoose/marten-comma
 import type { Directory, DirectoryRequest, Entry } from "../bindings/github.com/rikkimongoose/marten-commander/internal/desktop/models";
 import { DirectoryLoader } from "./directoryLoader";
 import { compareEntries, restoredIndex, visibleEntries, type SortField } from "./fileSorting";
+import { CommandError, type CommandId, type PanelContext } from "./commands";
 
 const kinds: Record<string, string> = { file: "Файл", directory: "Каталог", symlink: "Ссылка", other: "Спецфайл" };
 function column(field: SortField, headerName: string, width?: number): ColDef<Entry> {
@@ -27,7 +28,14 @@ const selection: RowSelectionOptions = { mode: "multiRow", checkboxes: false, he
 const rowHeight = 28;
 type View = { current?: string; index: number; top?: string; topIndex: number; focus: boolean };
 
-export function FilePanel({ label, active, activate }: { label: string; active: boolean; activate: () => void }) {
+export interface FilePanelHandle {
+  getContext(): PanelContext;
+  selectAll(): void;
+}
+
+type FilePanelProps = { label: string; active: boolean; activate: () => void; dispatch: (id: CommandId) => void };
+
+export const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(function FilePanel({ label, active, activate, dispatch }, ref) {
   const [directory, setDirectory] = useState<Directory>();
   const [draft, setDraft] = useState("");
   const [loading, setLoading] = useState(true);
@@ -44,6 +52,18 @@ export function FilePanel({ label, active, activate }: { label: string; active: 
   const activeRef = useRef(active);
   activeRef.current = active;
   const entries = useMemo(() => visibleEntries(directory?.entries ?? [], showHidden), [directory, showHidden]);
+
+  useImperativeHandle(ref, () => ({
+    getContext: () => ({
+      directoryLocation: snapshot.current?.location ?? null,
+      selectedLocations: api.current?.getSelectedNodes().flatMap(node => node.data ? [node.data.id] : []) ?? [],
+      focusedLocation: current.current ? api.current?.getRowNode(current.current)?.data?.id ?? null : null,
+    }),
+    selectAll: () => {
+      if (!api.current || api.current.isDestroyed()) throw new CommandError("unavailable", "Таблица недоступна.");
+      api.current.selectAll("filtered");
+    },
+  }));
 
   function capture(): View {
     const grid = api.current;
@@ -124,6 +144,7 @@ export function FilePanel({ label, active, activate }: { label: string; active: 
       <Box sx={{ display: "flex", alignItems: "center", px: 0.5, gap: 0.5 }}>
         <Button size="small" onClick={parent} disabled={!directory || directory.location === directory.parentLocation}>↑ Вверх</Button>
         <Button size="small" onClick={refresh}>Обновить</Button>
+        <Button size="small" disabled={!directory} onClick={() => dispatch("panel.selectAll")}>Выделить всё</Button>
         <FormControlLabel sx={{ ml: "auto", mr: 0 }} control={<Checkbox size="small" checked={showHidden} onChange={event => {
           restore.current = capture();
           setShowHidden(event.target.checked);
@@ -135,7 +156,9 @@ export function FilePanel({ label, active, activate }: { label: string; active: 
       </Alert>}
       <Box ref={gridRoot} sx={{ flex: 1, minHeight: 0, "& .directory-row": { fontWeight: 600 } }} onKeyDownCapture={event => {
         const inCell = event.target instanceof Element && !!event.target.closest(".ag-cell");
-        if (event.key === "Enter" && inCell) {
+        if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === "a" && inCell) {
+          event.preventDefault(); event.stopPropagation(); dispatch("panel.selectAll");
+        } else if (event.key === "Enter" && inCell) {
           event.preventDefault(); event.stopPropagation();
           open(current.current ? api.current?.getRowNode(current.current)?.data : undefined);
         } else if (event.key === "Backspace" && inCell) {
@@ -163,4 +186,4 @@ export function FilePanel({ label, active, activate }: { label: string; active: 
       </Typography>
     </Box>
   );
-}
+});

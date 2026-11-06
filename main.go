@@ -28,6 +28,7 @@ func main() {
 		Name: "marten-commander", Description: "Двухпанельный файловый менеджер",
 		Services: []application.Service{
 			application.NewService(desktop.NewDirectoryService(directories)),
+			application.NewService(&desktop.CommandService{}),
 		},
 		Assets: application.AssetOptions{Handler: application.AssetFileServerFS(assets)},
 		Mac:    application.MacOptions{ApplicationShouldTerminateAfterLastWindowClosed: true},
