@@ -51,6 +51,11 @@ export interface Entry {
     "detail": string;
 }
 
+export interface HomeDirectory {
+    "location": string;
+    "displayPath": string;
+}
+
 /**
  * PanelContext uses the same reversible native-path encoding as Directory and
  * Entry. A nil directory means the panel has not loaded a directory yet.
@@ -59,4 +64,20 @@ export interface PanelContext {
     "directoryLocation": string | null;
     "selectedLocations": string[] | null;
     "focusedLocation": string | null;
+}
+
+export interface Volume {
+    "id": string;
+    "name": string;
+    "rootLocation": string;
+    "displayPath": string;
+    "space": VolumeSpace | null;
+    "warning": string;
+}
+
+export interface VolumeSpace {
+    "total": string;
+    "free": string;
+    "available": string;
+    "used": string;
 }

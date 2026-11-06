@@ -1,5 +1,5 @@
 export type PanelId = "left" | "right";
-export type CommandId = "panel.selectAll";
+export type CommandId = "panel.selectAll" | "panel.goToLocation";
 
 // Locations are base64url-encoded absolute native paths, as in Directory/Entry
 // DTOs. Display strings cannot address files with escaped or non-UTF-8 names.
@@ -92,7 +92,7 @@ export type CommandAvailability = { readonly enabled: true } | { readonly enable
 export const CANCEL_COMMAND = Symbol("cancel command preparation");
 export interface CommandDefinition {
   available(context: CommandContext): CommandAvailability;
-  prepare?(context: CommandContext): JsonObject | typeof CANCEL_COMMAND | PromiseLike<JsonObject | typeof CANCEL_COMMAND>;
+  prepare?(context: CommandContext, params: JsonObject): JsonObject | typeof CANCEL_COMMAND | PromiseLike<JsonObject | typeof CANCEL_COMMAND>;
   execute(request: CommandRequest): void | PromiseLike<void>;
 }
 
@@ -117,16 +117,17 @@ export class CommandDispatcher<Id extends string = CommandId> {
     return definition.available(snapshotContext(this.readContext()));
   }
 
-  async dispatch(id: Id): Promise<"executed" | "cancelled"> {
+  async dispatch(id: Id, input: JsonObject = {}): Promise<"executed" | "cancelled"> {
     const definition = this.definitions.get(id);
     if (!definition) throw new CommandError("unknown_command", `Неизвестная команда: ${id}`);
     try {
       // Capture once, before availability and any asynchronous parameter dialog.
       const context = snapshotContext(this.readContext());
+      const initialParams = snapshotParams(input);
       const availability = definition.available(context);
       if (!availability.enabled) throw new CommandError("unavailable", availability.reason);
       const invocationId = this.newId();
-      const params = definition.prepare ? await definition.prepare(context) : {};
+      const params = definition.prepare ? await definition.prepare(context, initialParams) : initialParams;
       if (params === CANCEL_COMMAND) return "cancelled";
       await definition.execute(Object.freeze({ id: invocationId, type: id, context, params: snapshotParams(params) }));
       return "executed";

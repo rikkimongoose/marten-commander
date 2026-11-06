@@ -3,7 +3,8 @@ import { Alert, Box, CssBaseline } from "@mui/material";
 import { AgGridProvider } from "ag-grid-react";
 import { AllCommunityModule } from "ag-grid-community";
 import { FilePanel, type FilePanelHandle } from "./FilePanel";
-import { CommandDispatcher, CommandError, commandErrorMessage, sourceAndTarget, type CommandId, type PanelId } from "./commands";
+import { CommandDispatcher, CommandError, commandErrorMessage, sourceAndTarget, type CommandId, type JsonObject, type PanelId } from "./commands";
+import { registerLocationCommand } from "./locationCommand";
 
 export default function App() {
   const [active, setActive] = useState<PanelId>("left");
@@ -27,6 +28,11 @@ export default function App() {
         panel.selectAll();
       },
     });
+    registerLocationCommand(dispatcher, (id, location, volumeId) => {
+      const panel = id === "left" ? left.current : right.current;
+      if (!panel) throw new CommandError("unavailable", "Панель недоступна.");
+      panel.navigate(location, volumeId);
+    });
     return dispatcher;
   });
 
@@ -36,9 +42,9 @@ export default function App() {
     setActive(id);
   }
 
-  function dispatch(id: CommandId) {
+  function dispatch(id: CommandId, params?: JsonObject) {
     setCommandError("");
-    void commands.dispatch(id).catch(error => setCommandError(commandErrorMessage(error)));
+    void commands.dispatch(id, params).catch(error => setCommandError(commandErrorMessage(error)));
   }
   return (
     <AgGridProvider modules={[AllCommunityModule]}>

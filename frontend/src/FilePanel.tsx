@@ -3,10 +3,13 @@ import { Alert, Box, Button, Checkbox, FormControlLabel, LinearProgress, TextFie
 import { AgGridReact } from "ag-grid-react";
 import type { ColDef, GridApi, RowSelectionOptions } from "ag-grid-community";
 import { ReadDirectory } from "../bindings/github.com/rikkimongoose/marten-commander/internal/desktop/directoryservice";
-import type { Directory, DirectoryRequest, Entry } from "../bindings/github.com/rikkimongoose/marten-commander/internal/desktop/models";
+import type { Directory, Entry } from "../bindings/github.com/rikkimongoose/marten-commander/internal/desktop/models";
 import { DirectoryLoader } from "./directoryLoader";
 import { compareEntries, restoredIndex, visibleEntries, type SortField } from "./fileSorting";
-import { CommandError, type CommandId, type PanelContext } from "./commands";
+import { CommandError, type CommandId, type JsonObject, type PanelContext } from "./commands";
+import { VolumeBar } from "./VolumeBar";
+import { GetVolumeInfo } from "../bindings/github.com/rikkimongoose/marten-commander/internal/desktop/volumeservice";
+import { createPanelReader, type PanelNavigationRequest } from "./panelNavigation";
 
 const kinds: Record<string, string> = { file: "Файл", directory: "Каталог", symlink: "Ссылка", other: "Спецфайл" };
 function column(field: SortField, headerName: string, width?: number): ColDef<Entry> {
@@ -31,9 +34,10 @@ type View = { current?: string; index: number; top?: string; topIndex: number; f
 export interface FilePanelHandle {
   getContext(): PanelContext;
   selectAll(): void;
+  navigate(location: string, volumeId?: string): void;
 }
 
-type FilePanelProps = { label: string; active: boolean; activate: () => void; dispatch: (id: CommandId) => void };
+type FilePanelProps = { label: string; active: boolean; activate: () => void; dispatch: (id: CommandId, params?: JsonObject) => void };
 
 export const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(function FilePanel({ label, active, activate, dispatch }, ref) {
   const [directory, setDirectory] = useState<Directory>();
@@ -48,12 +52,13 @@ export const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(function Fi
   const gridRoot = useRef<HTMLDivElement>(null);
   const current = useRef<string>();
   const restore = useRef<View>();
-  const loader = useRef<DirectoryLoader>();
+  const loader = useRef<DirectoryLoader<PanelNavigationRequest>>();
   const activeRef = useRef(active);
   activeRef.current = active;
   const entries = useMemo(() => visibleEntries(directory?.entries ?? [], showHidden), [directory, showHidden]);
 
   useImperativeHandle(ref, () => ({
+    navigate: (location, volumeId) => navigate({ path: "", location, volumeId }),
     getContext: () => ({
       directoryLocation: snapshot.current?.location ?? null,
       selectedLocations: api.current?.getSelectedNodes().flatMap(node => node.data ? [node.data.id] : []) ?? [],
@@ -94,7 +99,7 @@ export const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(function Fi
   }
 
   useEffect(() => {
-    const reader = new DirectoryLoader(ReadDirectory, {
+    const reader = new DirectoryLoader(createPanelReader(ReadDirectory, GetVolumeInfo), {
       start: () => { setLoading(true); setError(""); },
       success: next => {
         const sameDirectory = snapshot.current?.location === next.location;
@@ -117,7 +122,7 @@ export const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(function Fi
     return () => { reader.dispose(); loader.current = undefined; };
   }, []);
 
-  function navigate(request: DirectoryRequest) { loader.current?.request(request); }
+  function navigate(request: PanelNavigationRequest) { loader.current?.request(request); }
   function refresh() { navigate({ path: "", location: snapshot.current?.location ?? "" }); }
   function parent() {
     if (snapshot.current) navigate({ path: "", location: snapshot.current.parentLocation });
@@ -133,6 +138,9 @@ export const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(function Fi
       <Typography title={directory?.displayPath} sx={{ px: 1, py: 0.5, fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
         {label}: {directory?.displayPath ?? (loading ? "Загрузка каталога…" : "Каталог не открыт")}
       </Typography>
+      <VolumeBar label={label} directory={directory} choose={(location, volumeId) => {
+        dispatch("panel.goToLocation", volumeId === undefined ? { location } : { location, volumeId });
+      }} />
       <Box component="form" sx={{ display: "flex", gap: 0.5, px: 1 }} onSubmit={event => {
         event.preventDefault();
         if (draft !== "") navigate({ path: draft, location: "" });

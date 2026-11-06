@@ -3,9 +3,11 @@
 
 import * as CommandService from "./commandservice.js";
 import * as DirectoryService from "./directoryservice.js";
+import * as VolumeService from "./volumeservice.js";
 export {
     CommandService,
-    DirectoryService
+    DirectoryService,
+    VolumeService
 };
 
 export type {
@@ -14,5 +16,8 @@ export type {
     Directory,
     DirectoryRequest,
     Entry,
-    PanelContext
+    HomeDirectory,
+    PanelContext,
+    Volume,
+    VolumeSpace
 } from "./models.js";

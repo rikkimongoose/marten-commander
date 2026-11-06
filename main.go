@@ -8,6 +8,7 @@ import (
 	"github.com/rikkimongoose/marten-commander/internal/app"
 	"github.com/rikkimongoose/marten-commander/internal/desktop"
 	"github.com/rikkimongoose/marten-commander/internal/localfs"
+	"github.com/rikkimongoose/marten-commander/internal/volumes"
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
@@ -29,6 +30,7 @@ func main() {
 		Services: []application.Service{
 			application.NewService(desktop.NewDirectoryService(directories)),
 			application.NewService(&desktop.CommandService{}),
+			application.NewService(desktop.NewVolumeService(volumes.NewService())),
 		},
 		Assets: application.AssetOptions{Handler: application.AssetFileServerFS(assets)},
 		Mac:    application.MacOptions{ApplicationShouldTerminateAfterLastWindowClosed: true},

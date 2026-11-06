@@ -10,21 +10,21 @@ type Handlers = {
 // One active call and one replaceable pending request per panel. Sequence IDs,
 // rather than paths, also protect A -> B -> A and late errors. Cancellation is
 // an optimisation; correctness does not depend on the provider honouring it.
-export class DirectoryLoader {
+export class DirectoryLoader<Request extends DirectoryRequest = DirectoryRequest> {
   private version = 0;
   private disposed = false;
   private running = false;
   private active: Call | undefined;
-  private pending: { request: DirectoryRequest; version: number } | undefined;
-  private fetch: (request: DirectoryRequest) => Call;
+  private pending: { request: Request; version: number } | undefined;
+  private fetch: (request: Request) => Call;
   private handlers: Handlers;
 
-  constructor(fetch: (request: DirectoryRequest) => Call, handlers: Handlers) {
+  constructor(fetch: (request: Request) => Call, handlers: Handlers) {
     this.fetch = fetch;
     this.handlers = handlers;
   }
 
-  request(request: DirectoryRequest) {
+  request(request: Request) {
     if (this.disposed) return;
     this.pending = { request, version: ++this.version };
     this.handlers.start();
