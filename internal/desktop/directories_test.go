@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io/fs"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -37,7 +38,7 @@ func TestDTOAndOpaquePathsRoundTrip(t *testing.T) {
 			ModifiedAt: time.Date(2026, 1, 2, 3, 4, 5, 123456789, time.UTC)},
 		{Path: filepath.Join(dir, ".hidden"), Name: ".hidden", Kind: core.KindFile, Hidden: true},
 	}}
-	service := NewDirectoryService(app.NewDirectoryService(provider, provider, dir))
+	service := NewDirectoryService(app.NewDirectoryService(provider, provider, dir), false)
 	result, err := service.ReadDirectory(context.Background(), DirectoryRequest{})
 	if err != nil {
 		t.Fatal(err)
@@ -75,7 +76,7 @@ func TestDTOAndOpaquePathsRoundTrip(t *testing.T) {
 
 func TestInvalidRequestAndErrors(t *testing.T) {
 	provider := &source{}
-	service := NewDirectoryService(app.NewDirectoryService(provider, provider, t.TempDir()))
+	service := NewDirectoryService(app.NewDirectoryService(provider, provider, t.TempDir()), false)
 	for _, request := range []DirectoryRequest{{Location: "!invalid"}, {Path: "/tmp", Location: encode("/tmp")}} {
 		if _, err := service.ReadDirectory(context.Background(), request); err == nil {
 			t.Fatalf("accepted invalid request: %+v", request)
@@ -83,13 +84,75 @@ func TestInvalidRequestAndErrors(t *testing.T) {
 	}
 	provider.err = fs.ErrPermission
 	_, err := service.ReadDirectory(context.Background(), DirectoryRequest{})
-	if err == nil || !strings.Contains(err.Error(), "Не удалось прочитать каталог") || !strings.Contains(err.Error(), fs.ErrPermission.Error()) {
+	if err == nil || !strings.Contains(err.Error(), "Нет прав на чтение каталога") {
 		t.Fatalf("unhelpful error: %v", err)
 	}
 	provider.err = errors.New("failure\nwith control")
 	_, err = service.ReadDirectory(context.Background(), DirectoryRequest{})
 	if strings.Contains(err.Error(), "\n") {
 		t.Fatalf("unescaped error: %q", err)
+	}
+}
+
+func TestDirectoryAncestorsUseResolvedOpaqueAddresses(t *testing.T) {
+	base := t.TempDir()
+	// Names are intentionally unsuitable for comparisons against display paths.
+	path := filepath.Join(base, "home-\xff", "child\nname")
+	provider := &source{}
+	service := NewDirectoryService(app.NewDirectoryService(provider, provider, base), false)
+	result, err := service.ReadDirectory(context.Background(), DirectoryRequest{Location: encode(path)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.AncestorLocations) < 2 || result.AncestorLocations[0] != encode(filepath.Dir(path)) || result.AncestorLocations[1] != encode(base) {
+		t.Fatalf("wrong ancestry: %+v", result)
+	}
+	root := filepath.VolumeName(base) + string(filepath.Separator)
+	if result.AncestorLocations[len(result.AncestorLocations)-1] != encode(root) {
+		t.Fatalf("ancestry must end at root: %+v", result)
+	}
+	data, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded Directory
+	if err := json.Unmarshal(data, &decoded); err != nil || !reflect.DeepEqual(decoded.AncestorLocations, result.AncestorLocations) {
+		t.Fatalf("ancestry lost in transport: %+v, %v", decoded, err)
+	}
+	result, err = service.ReadDirectory(context.Background(), DirectoryRequest{Path: root})
+	if err != nil || result.AncestorLocations == nil || len(result.AncestorLocations) != 0 {
+		t.Fatalf("root must have an empty ancestor list: %+v, %v", result, err)
+	}
+}
+
+func TestPermissionDeniedMessageAndRecovery(t *testing.T) {
+	path := filepath.FromSlash("/boot/efi")
+	provider := &source{err: &fs.PathError{Op: "open", Path: path, Err: fs.ErrPermission}}
+	service := NewDirectoryService(app.NewDirectoryService(provider, provider, path), false)
+	for _, request := range []DirectoryRequest{{}, {Path: path}, {Location: encode(path)}} {
+		result, err := service.ReadDirectory(context.Background(), request)
+		if err == nil || err.Error() != "Нет прав на чтение каталога "+display(path) || result.Location != "" || result.Entries != nil {
+			t.Fatalf("permission failure: %+v, %v", result, err)
+		}
+	}
+	provider.err = nil
+	if _, err := service.ReadDirectory(context.Background(), DirectoryRequest{}); err != nil {
+		t.Fatalf("service must remain usable after a failed read: %v", err)
+	}
+}
+
+func TestInitialHomeFlagDoesNotLabelFallbackOrOrdinaryNavigation(t *testing.T) {
+	path := t.TempDir()
+	provider := &source{}
+	for _, initialIsHome := range []bool{true, false} {
+		service := NewDirectoryService(app.NewDirectoryService(provider, provider, path), initialIsHome)
+		for _, request := range []DirectoryRequest{{}, {Path: path}, {Location: encode(path)}} {
+			result, err := service.ReadDirectory(context.Background(), request)
+			wantHome := initialIsHome && request.Path == "" && request.Location == ""
+			if err != nil || result.InitialHome != wantHome || result.Location != encode(path) {
+				t.Fatalf("initialIsHome=%v request=%+v: %+v, %v", initialIsHome, request, result, err)
+			}
+		}
 	}
 }
 

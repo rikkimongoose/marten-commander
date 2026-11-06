@@ -28,10 +28,10 @@ export default function App() {
         panel.selectAll();
       },
     });
-    registerLocationCommand(dispatcher, (id, location, volumeId) => {
+    registerLocationCommand(dispatcher, (id, location, volumeId, home) => {
       const panel = id === "left" ? left.current : right.current;
       if (!panel) throw new CommandError("unavailable", "Панель недоступна.");
-      panel.navigate(location, volumeId);
+      panel.navigate(location, volumeId, home);
     });
     return dispatcher;
   });

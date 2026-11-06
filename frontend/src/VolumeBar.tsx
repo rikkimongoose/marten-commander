@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { Box, Button, Divider, LinearProgress, Menu, MenuItem, Tooltip, Typography } from "@mui/material";
 import { GetHomeDirectory, GetVolumeInfo, ListVolumes } from "../bindings/github.com/rikkimongoose/marten-commander/internal/desktop/volumeservice";
-import type { Directory, Volume } from "../bindings/github.com/rikkimongoose/marten-commander/internal/desktop/models";
-import { cancelVolumeCall, loadVolumeChoices, spacePresentation, type VolumeChoices } from "./volumePresentation";
+import type { Directory, HomeDirectory, Volume } from "../bindings/github.com/rikkimongoose/marten-commander/internal/desktop/models";
+import { cancelVolumeCall, loadVolumeChoices, locationCaption, spacePresentation, type VolumeChoices } from "./volumePresentation";
 
-type Props = { label: string; directory?: Directory; choose: (location: string, volumeId?: string) => void };
+type Props = { label: string; directory?: Directory; selectedHome?: HomeDirectory; choose: (location: string, volumeId?: string, home?: boolean) => void };
 
-export function VolumeBar({ label, directory, choose }: Props) {
+export function VolumeBar({ label, directory, selectedHome, choose }: Props) {
   const location = directory?.location;
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const [choices, setChoices] = useState<VolumeChoices>({ volumes: [], home: null, errors: [], loadingVolumes: false, loadingHome: false });
@@ -49,12 +49,12 @@ export function VolumeBar({ label, directory, choose }: Props) {
     }, controller.signal);
   }
   function close() { menuVersion.current++; menuRequest.current?.abort(); setAnchor(null); }
-  function select(location: string, volumeId?: string) { close(); choose(location, volumeId); }
+  function select(location: string, volumeId?: string, home?: boolean) { close(); choose(location, volumeId, home); }
 
   // Never show the previous directory's capacity while a newer request runs.
   const current = info?.location === location ? info : undefined;
   const space = spacePresentation(current?.volume?.space);
-  const caption = current?.volume ? `${current.volume.name} — ${current.volume.displayPath}` : "Выбор места";
+  const caption = locationCaption(selectedHome, current?.volume);
   const warning = current?.error || current?.volume?.warning;
 
   return (
@@ -80,12 +80,12 @@ export function VolumeBar({ label, directory, choose }: Props) {
       </Box>
       {warning && <Typography role="status" sx={{ fontSize: 11, color: "text.secondary", overflowWrap: "anywhere" }}>{warning}</Typography>}
       <Menu anchorEl={anchor} open={!!anchor} onClose={close} slotProps={{ list: { "aria-label": `Места: ${label}` } }}>
-        <MenuItem disabled={!home} onClick={() => home && select(home.location)}>
+        <MenuItem selected={!!selectedHome} disabled={!home} onClick={() => home && select(home.location, undefined, true)}>
           Home — {home?.displayPath ?? (loadingHome ? "Загрузка…" : "недоступен")}
         </MenuItem>
         <Divider />
         {loadingVolumes && <MenuItem disabled>Загрузка томов…</MenuItem>}
-        {volumes.map(volume => <MenuItem key={volume.id} onClick={() => select(volume.rootLocation, volume.id)}
+        {volumes.map(volume => <MenuItem key={volume.id} selected={!selectedHome && current?.volume?.id === volume.id} onClick={() => select(volume.rootLocation, volume.id)}
           title={volume.warning || undefined}>{volume.name} — {volume.displayPath}</MenuItem>)}
         {!loadingVolumes && !volumes.length && !listError && <MenuItem disabled>Нет доступных томов</MenuItem>}
         {listError && <MenuItem disabled sx={{ whiteSpace: "normal", maxWidth: 480 }}>{listError}</MenuItem>}

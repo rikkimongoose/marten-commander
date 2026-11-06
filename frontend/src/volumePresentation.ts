@@ -1,5 +1,10 @@
 import type { HomeDirectory, Volume, VolumeSpace } from "../bindings/github.com/rikkimongoose/marten-commander/internal/desktop/models";
 
+export function locationCaption(home: HomeDirectory | undefined, volume: Volume | undefined): string {
+  if (home) return `Home — ${home.displayPath}`;
+  return volume ? `${volume.name} — ${volume.displayPath}` : "Выбор места";
+}
+
 export function formatBytes(value: bigint): string {
   const units = ["Б", "КиБ", "МиБ", "ГиБ", "ТиБ", "ПиБ", "ЭиБ"];
   let unit = 0, scale = 1n;

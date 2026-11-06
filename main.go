@@ -17,6 +17,7 @@ var assets embed.FS
 
 func main() {
 	initial, err := os.UserHomeDir()
+	initialIsHome := err == nil
 	if err != nil {
 		initial, err = os.Getwd()
 		if err != nil {
@@ -28,7 +29,7 @@ func main() {
 	desktopApp := application.New(application.Options{
 		Name: "marten-commander", Description: "Двухпанельный файловый менеджер",
 		Services: []application.Service{
-			application.NewService(desktop.NewDirectoryService(directories)),
+			application.NewService(desktop.NewDirectoryService(directories, initialIsHome)),
 			application.NewService(&desktop.CommandService{}),
 			application.NewService(desktop.NewVolumeService(volumes.NewService())),
 		},

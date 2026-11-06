@@ -1,8 +1,20 @@
-import type { Directory, DirectoryRequest, Volume } from "../bindings/github.com/rikkimongoose/marten-commander/internal/desktop/models";
+import type { Directory, DirectoryRequest, HomeDirectory, Volume } from "../bindings/github.com/rikkimongoose/marten-commander/internal/desktop/models";
 import { CommandError } from "./commands.ts";
 
-export type PanelNavigationRequest = DirectoryRequest & { volumeId?: string };
+export type PanelNavigationRequest = DirectoryRequest & { volumeId?: string; home?: boolean };
 type Call<T> = PromiseLike<T> & { cancel?: () => void | PromiseLike<void> };
+
+// Called only for the latest successful directory read. Failed/obsolete choices
+// must not replace the shortcut associated with the visible snapshot.
+export function selectedHomeAfterNavigation(
+  previous: HomeDirectory | undefined, directory: Directory, request: PanelNavigationRequest,
+): HomeDirectory | undefined {
+  const initialHome = request.path === "" && request.location === "" && directory.initialHome;
+  if (request.home || initialHome) return { location: directory.location, displayPath: directory.displayPath };
+  if (request.volumeId !== undefined) return undefined;
+  return previous && (directory.location === previous.location || directory.ancestorLocations?.includes(previous.location))
+    ? previous : undefined;
+}
 
 // Validation and reading form one DirectoryLoader request. Its existing version
 // guard handles newer volume choices, manual paths, cancellation and unmounts.

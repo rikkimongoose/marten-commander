@@ -21,6 +21,16 @@ export interface CommandRequest {
 export interface Directory {
     "location": string;
     "parentLocation": string;
+
+    /**
+     * Resolved parents, nearest first; excludes self.
+     */
+    "ancestorLocations": string[] | null;
+
+    /**
+     * Initial request opened the configured Home, not the working-directory fallback.
+     */
+    "initialHome": boolean;
     "displayPath": string;
     "entries": Entry[] | null;
 }

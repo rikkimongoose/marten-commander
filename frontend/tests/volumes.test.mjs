@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { CommandDispatcher } from "../src/commands.ts";
 import { DirectoryLoader } from "../src/directoryLoader.ts";
 import { registerLocationCommand } from "../src/locationCommand.ts";
-import { createPanelReader } from "../src/panelNavigation.ts";
-import { formatBytes, loadVolumeChoices, spacePresentation } from "../src/volumePresentation.ts";
+import { createPanelReader, selectedHomeAfterNavigation } from "../src/panelNavigation.ts";
+import { formatBytes, loadVolumeChoices, locationCaption, spacePresentation } from "../src/volumePresentation.ts";
 import { CancellablePromise } from "@wailsio/runtime/cancellable";
 
 const tick = () => new Promise(resolve => setImmediate(resolve));
@@ -156,8 +156,132 @@ test("dispatcher freezes initial params before asynchronous preparation", async 
 test("Home uses ordinary directory navigation, without a fictional volume lookup", async () => {
   const calls = [];
   const reader = createPanelReader(async request => { calls.push(request); return { location: request.location }; }, () => assert.fail("Home is not a volume"));
-  assert.deepEqual(await reader({ path: "", location: "home" }), { location: "home" });
+  assert.deepEqual(await reader({ path: "", location: "home", home: true }), { location: "home" });
   assert.deepEqual(calls, [{ path: "", location: "home" }]);
+});
+
+const directory = (location, ancestorLocations = [], displayPath = location) => ({
+  location, ancestorLocations, displayPath, entries: [{ id: `${location}-file`, name: "retained.txt" }],
+});
+
+test("both panels initially select Home from the backend default, independently of the System volume", async () => {
+  const home = { ...directory("resolved-home", ["root"], "/home/test"), initialHome: true };
+  const system = { ...volume("root", "/"), name: "System" };
+  const selected = {};
+  const loaders = Object.fromEntries(["left", "right"].map(id => [id, new DirectoryLoader(
+    async request => request.location ? directory(request.location, []) : home,
+    { start() {}, success: (next, request) => { selected[id] = selectedHomeAfterNavigation(selected[id], next, request); }, failure: assert.fail },
+  )]));
+  for (const loader of Object.values(loaders)) loader.request({ path: "", location: "" });
+  await tick();
+  assert.equal(locationCaption(selected.left, system), "Home — /home/test");
+  assert.equal(locationCaption(selected.right, system), "Home — /home/test");
+  loaders.left.request({ path: "", location: "root" }); await tick();
+  assert.equal(locationCaption(selected.left, system), "System — /");
+  assert.equal(locationCaption(selected.right, system), "Home — /home/test");
+  for (const loader of Object.values(loaders)) loader.dispose();
+});
+
+test("a working-directory fallback and ordinary navigation do not implicitly select Home", () => {
+  const fallback = { ...directory("cwd", ["root"], "/work"), initialHome: false };
+  assert.equal(selectedHomeAfterNavigation(undefined, fallback, { path: "", location: "" }), undefined);
+  const home = { ...directory("home", ["root"], "/home/test"), initialHome: true };
+  for (const request of [{ path: "", location: "home" }, { path: "/home/test", location: "" }]) {
+    assert.equal(selectedHomeAfterNavigation(undefined, home, request), undefined);
+  }
+});
+
+test("explicit Home stays selected on System, descendants and refresh; capacity uses the real filesystem", () => {
+  const homeDirectory = directory("home-id", ["users-id", "root-id"], "/home/test");
+  let selected = selectedHomeAfterNavigation(undefined, homeDirectory, { home: true });
+  const system = { ...volume("system", "/"), name: "System", space: { total: "1000", free: "400", available: "300", used: "600" } };
+  assert.equal(locationCaption(selected, system), "Home — /home/test");
+  assert.equal(locationCaption(selected, undefined), "Home — /home/test", "capacity pending/failed must not hide Home");
+  selected = selectedHomeAfterNavigation(selected, directory("child-id", ["home-id", "users-id", "root-id"]), {});
+  selected = selectedHomeAfterNavigation(selected, directory("child-id", ["home-id", "users-id", "root-id"]), {});
+  assert.equal(locationCaption(selected, system), "Home — /home/test");
+  assert.equal(spacePresentation(system.space).percent, 60);
+  assert.match(spacePresentation(system.space).text, /300 Б свободно из 1\s000 Б/);
+  const nestedMount = { ...volume("data", "/home/test/data"), space: { total: "100", free: "20", available: "20", used: "80" } };
+  assert.equal(locationCaption(selected, nestedMount), "Home — /home/test");
+  assert.equal(spacePresentation(nestedMount.space).percent, 80, "Home may contain another mounted filesystem");
+  selected = selectedHomeAfterNavigation(selected, homeDirectory, {});
+  assert.equal(selected.location, "home-id");
+  selected = selectedHomeAfterNavigation(selected, directory("users-id", ["root-id"]), {});
+  assert.equal(locationCaption(selected, system), "System — /");
+  assert.equal(selectedHomeAfterNavigation(selected, homeDirectory, {}), undefined, "ordinary re-entry does not select Home implicitly");
+});
+
+test("Home uses canonical ancestry, not display-path prefixes, and an explicit volume choice clears it", () => {
+  const homeDirectory = directory("resolved-home", ["root"], "/home/test");
+  const selected = selectedHomeAfterNavigation(undefined, homeDirectory, { home: true, location: "home-symlink" });
+  assert.equal(selected.location, "resolved-home");
+  for (const next of [directory("sibling", ["root"], "/home/test-other"), directory("external-link-target", ["root"], "/outside")]) {
+    assert.equal(selectedHomeAfterNavigation(selected, next, {}), undefined);
+  }
+  assert.equal(selectedHomeAfterNavigation(selected, homeDirectory, { volumeId: "home-mount" }), undefined);
+});
+
+test("Home selection follows the captured panel and only the latest successful navigation", async () => {
+  const state = context();
+  const slow = Promise.withResolvers();
+  const snapshots = {}, selected = {}, errors = [];
+  const loaders = Object.fromEntries(["left", "right"].map(id => [id, new DirectoryLoader(request =>
+    request.location === "slow-home" ? slow.promise : Promise.resolve(directory(request.location, ["root"])), {
+    start() {},
+    success: (next, request) => { snapshots[id] = next; selected[id] = selectedHomeAfterNavigation(selected[id], next, request); },
+    failure: error => errors.push(error),
+  })]));
+  const dispatcher = new CommandDispatcher(() => state);
+  registerLocationCommand(dispatcher, (id, location, volumeId, home) => loaders[id].request({ path: "", location, volumeId, home }));
+  const params = { location: "home", home: true };
+  const pending = dispatcher.dispatch("panel.goToLocation", params);
+  state.activePanel = "right"; params.home = false;
+  await pending; await tick();
+  assert.equal(selected.left.location, "home");
+  assert.equal(selected.right, undefined);
+  await dispatcher.dispatch("panel.goToLocation", { location: "right-home", home: true }); await tick();
+  assert.equal(selected.right.location, "right-home");
+  state.activePanel = "left";
+  await dispatcher.dispatch("panel.goToLocation", { location: "slow-home", home: true });
+  loaders.left.request({ path: "", location: "outside" });
+  slow.resolve(directory("late-home", ["root"])); await tick();
+  assert.equal(snapshots.left.location, "outside");
+  assert.equal(selected.left, undefined, "obsolete Home must not overwrite a later navigation");
+  assert.equal(selected.right.location, "right-home");
+  assert.deepEqual(errors, []);
+  for (const params of [{ location: "home", home: "yes" }, { location: "home", home: true, volumeId: "system" }]) {
+    await assert.rejects(dispatcher.dispatch("panel.goToLocation", params), error => error.code === "invalid_params");
+  }
+  loaders.left.dispose(); loaders.right.dispose();
+});
+
+test("Permission denied for /boot/efi preserves the directory, files and Home selection and allows recovery", async () => {
+  let snapshot, selected, error, loading;
+  const reader = createPanelReader(async request => {
+    if (request.location === "efi" || request.location === "denied-home") throw new Error("Нет прав на чтение каталога /boot/efi");
+    return directory(request.location, request.location === "child" ? ["home", "root"] : ["root"]);
+  }, async request => volume("efi-volume", request.location));
+  const loader = new DirectoryLoader(reader, {
+    start() { loading = true; error = undefined; },
+    success(next, request) { snapshot = next; selected = selectedHomeAfterNavigation(selected, next, request); loading = false; },
+    failure(reason) { error = reason.message; loading = false; },
+  });
+  loader.request({ path: "", location: "home", home: true }); await tick();
+  const previous = snapshot, previousSelection = selected;
+  for (const request of [{ location: "efi" }, { location: "efi", volumeId: "efi-volume" }, { location: "denied-home", home: true }]) {
+    loader.request({ path: "", ...request }); await tick();
+    assert.equal(snapshot, previous, "keep the entire previous snapshot, including file rows");
+    assert.equal(selected, previousSelection);
+    assert.equal(error, "Нет прав на чтение каталога /boot/efi");
+    assert.equal(loading, false);
+  }
+  loader.request({ path: "", location: "child" }); await tick();
+  assert.equal(snapshot.location, "child");
+  assert.equal(selected.location, "home");
+  assert.equal(error, undefined);
+  assert.equal(loading, false);
+  loader.dispose();
 });
 
 test("volume validation allows unknown capacity but rejects disconnected/replaced volumes before navigating", async () => {

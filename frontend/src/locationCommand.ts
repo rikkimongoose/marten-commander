@@ -4,17 +4,19 @@ import { CommandError, type CommandDispatcher, type PanelId } from "./commands.t
 // than creating a second backend navigation or panel-state mechanism.
 export function registerLocationCommand(
   dispatcher: CommandDispatcher,
-  navigate: (panel: PanelId, location: string, volumeId?: string) => void,
+  navigate: (panel: PanelId, location: string, volumeId?: string, home?: boolean) => void,
 ) {
   dispatcher.register("panel.goToLocation", {
     available: () => ({ enabled: true }), // Home can recover an initially failed directory read.
     execute: request => {
       const params = request.params;
       if (typeof params.location !== "string" || params.location === "" ||
-        (params.volumeId !== undefined && typeof params.volumeId !== "string")) {
+        (params.volumeId !== undefined && typeof params.volumeId !== "string") ||
+        (params.home !== undefined && typeof params.home !== "boolean") ||
+        (params.home === true && params.volumeId !== undefined)) {
         throw new CommandError("invalid_params", "Не указано расположение для перехода.");
       }
-      navigate(request.context.activePanel, params.location, params.volumeId as string | undefined);
+      navigate(request.context.activePanel, params.location, params.volumeId as string | undefined, params.home as boolean | undefined);
     },
   });
 }

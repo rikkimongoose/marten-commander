@@ -1,9 +1,9 @@
 import type { Directory, DirectoryRequest } from "../bindings/github.com/rikkimongoose/marten-commander/internal/desktop/models";
 
 type Call = PromiseLike<Directory> & { cancel?: () => void | PromiseLike<void> };
-type Handlers = {
+type Handlers<Request> = {
   start: () => void;
-  success: (directory: Directory) => void;
+  success: (directory: Directory, request: Request) => void;
   failure: (error: unknown) => void;
 };
 
@@ -17,9 +17,9 @@ export class DirectoryLoader<Request extends DirectoryRequest = DirectoryRequest
   private active: Call | undefined;
   private pending: { request: Request; version: number } | undefined;
   private fetch: (request: Request) => Call;
-  private handlers: Handlers;
+  private handlers: Handlers<Request>;
 
-  constructor(fetch: (request: Request) => Call, handlers: Handlers) {
+  constructor(fetch: (request: Request) => Call, handlers: Handlers<Request>) {
     this.fetch = fetch;
     this.handlers = handlers;
   }
@@ -61,7 +61,7 @@ export class DirectoryLoader<Request extends DirectoryRequest = DirectoryRequest
         try {
           this.active = this.fetch(request);
           const directory = await this.active;
-          if (!this.disposed && version === this.version) this.handlers.success(directory);
+          if (!this.disposed && version === this.version) this.handlers.success(directory, request);
         } catch (error) {
           if (!this.disposed && version === this.version) this.handlers.failure(error);
         } finally {

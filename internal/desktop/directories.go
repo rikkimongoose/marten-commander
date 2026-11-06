@@ -4,7 +4,10 @@ package desktop
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
+	"io/fs"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"unicode"
@@ -35,18 +38,21 @@ type Entry struct {
 }
 
 type Directory struct {
-	Location       string  `json:"location"`
-	ParentLocation string  `json:"parentLocation"`
-	DisplayPath    string  `json:"displayPath"`
-	Entries        []Entry `json:"entries"`
+	Location          string   `json:"location"`
+	ParentLocation    string   `json:"parentLocation"`
+	AncestorLocations []string `json:"ancestorLocations"` // Resolved parents, nearest first; excludes self.
+	InitialHome       bool     `json:"initialHome"`       // Initial request opened the configured Home, not the working-directory fallback.
+	DisplayPath       string   `json:"displayPath"`
+	Entries           []Entry  `json:"entries"`
 }
 
 type DirectoryService struct {
-	directories *app.DirectoryService
+	directories   *app.DirectoryService
+	initialIsHome bool
 }
 
-func NewDirectoryService(directories *app.DirectoryService) *DirectoryService {
-	return &DirectoryService{directories: directories}
+func NewDirectoryService(directories *app.DirectoryService, initialIsHome bool) *DirectoryService {
+	return &DirectoryService{directories: directories, initialIsHome: initialIsHome}
 }
 
 // Wails injects the call context; cancelling its generated promise cancels reads.
@@ -64,11 +70,31 @@ func (s *DirectoryService) ReadDirectory(ctx context.Context, request DirectoryR
 	}
 	directory, err := s.directories.ReadDirectory(ctx, path)
 	if err != nil {
+		if errors.Is(err, fs.ErrPermission) {
+			// PathError also supplies the actual path for an initial-directory request.
+			var pathError *fs.PathError
+			if path == "" && errors.As(err, &pathError) {
+				path = pathError.Path
+			}
+			return Directory{}, fmt.Errorf("Нет прав на чтение каталога %s", display(path))
+		}
 		return Directory{}, fmt.Errorf("Не удалось прочитать каталог %s: %s", display(path), display(err.Error()))
 	}
 	result := Directory{
 		Location: encode(directory.Path), ParentLocation: encode(directory.Parent),
 		DisplayPath: display(directory.Path), Entries: make([]Entry, 0, len(directory.Entries)),
+		AncestorLocations: make([]string, 0),
+		InitialHome:       s.initialIsHome && request.Path == "" && request.Location == "",
+	}
+	// Keep platform path rules and raw filename bytes in Go. React only compares
+	// opaque addresses to retain a selected shortcut inside its resolved subtree.
+	for current := directory.Path; ; {
+		parent := filepath.Dir(current)
+		if parent == current {
+			break
+		}
+		result.AncestorLocations = append(result.AncestorLocations, encode(parent))
+		current = parent
 	}
 	for _, entry := range directory.Entries {
 		item := Entry{
