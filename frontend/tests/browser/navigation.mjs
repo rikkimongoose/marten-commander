@@ -126,6 +126,15 @@ try {
   await panel("right").getByRole("textbox").press("Enter"); await path("right", home);
   await cell("right", `${home}/child`).dblclick(); await path("right", `${home}/child`);
   await page.keyboard.press("Backspace"); await path("right", home); await focused("right", `${home}/child`);
+
+  // Ctrl-clicking a row in the inactive panel activates that panel and makes
+  // the clicked row both current and explicitly selected.
+  await page.keyboard.press("Tab");
+  assert.equal(await panel("left").getAttribute("data-active"), "true");
+  await cell("right", `${home}/one.txt`).click({ modifiers: ["Control"] });
+  assert.equal(await panel("right").getAttribute("data-active"), "true");
+  await focused("right", `${home}/one.txt`); await count("right", 1);
+  assert.equal(await panel("right").locator(`.ag-row[row-id="${home}/one.txt"]`).getAttribute("aria-selected"), "true");
   assert.deepEqual(errors, []);
   console.log("PASS: real AG Grid navigation, cursor, Ctrl/Shift selection, Tab, root, permission errors and async focus");
 } finally {

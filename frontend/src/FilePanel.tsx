@@ -58,7 +58,8 @@ export const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(function Fi
   const root = useRef<HTMLDivElement>(null);
   const gridRoot = useRef<HTMLDivElement>(null);
   const current = useRef<string>();
-  const modifiedClickCursor = useRef<{ rowId?: string }>();
+  const modifiedClickCursor = useRef<{ rowId?: string; selectClicked: boolean }>();
+  const ctrlActivatesPanel = useRef(false);
   const restore = useRef<View>();
   const gridRendered = useRef(false);
   const loader = useRef<DirectoryLoader<PanelNavigationRequest>>();
@@ -178,7 +179,11 @@ export const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(function Fi
   }
 
   return (
-    <Box ref={root} role="region" aria-label={label} data-active={active} onFocusCapture={activate} onMouseDownCapture={activate}
+    <Box ref={root} role="region" aria-label={label} data-active={active} onFocusCapture={activate} onMouseDownCapture={event => {
+      ctrlActivatesPanel.current = !activeRef.current && event.button === 0 && (event.ctrlKey || event.metaKey) &&
+        event.target instanceof Element && !!event.target.closest(".ag-cell");
+      activate();
+    }}
       sx={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column",
         border: "2px solid", borderColor: active ? "primary.main" : "divider", bgcolor: "background.paper" }}>
       <Typography title={directory?.displayPath} sx={{ px: 1, py: 0.5, fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
@@ -216,7 +221,13 @@ export const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(function Fi
             // AG Grid focuses the clicked cell before updating its row
             // selection. Preserve our independent keyboard cursor until the
             // grid has finished applying Ctrl/Shift selection.
-            modifiedClickCursor.current = { rowId: current.current };
+            modifiedClickCursor.current = {
+              // In an inactive panel the clicked row becomes both the current
+              // row and an explicitly selected row. In the active panel a
+              // modifier-click leaves the current row where it was.
+              rowId: ctrlActivatesPanel.current ? undefined : current.current,
+              selectClicked: ctrlActivatesPanel.current,
+            };
           }
         }}
         sx={theme => ({ flex: 1, minHeight: 0, outlineOffset: -2,
@@ -261,6 +272,10 @@ export const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(function Fi
             queueMicrotask(() => {
               if (modifiedClickCursor.current !== preserved || event.api.isDestroyed()) return;
               modifiedClickCursor.current = undefined;
+              ctrlActivatesPanel.current = false;
+              if (preserved.selectClicked && fileLocation(event.data)) {
+                event.node.setSelected(true, false, "api");
+              }
               const rowId = preserved.rowId ?? event.data?.id;
               const index = rowId ? event.api.getRowNode(rowId)?.rowIndex : null;
               if (!rowId || index === null || index === undefined) return;
