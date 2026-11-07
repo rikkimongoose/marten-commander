@@ -36,6 +36,22 @@ func TestCommandSourceAndTarget(t *testing.T) {
 	}
 }
 
+func TestCommandEffectiveSelection(t *testing.T) {
+	request := commandFixture(t)
+	panel := request.Context.Left
+	if got := panel.effectiveSelection(); !reflect.DeepEqual(got, panel.SelectedLocations) {
+		t.Fatalf("explicit selection must win over cursor: %v", got)
+	}
+	panel.SelectedLocations = []string{}
+	if got := panel.effectiveSelection(); !reflect.DeepEqual(got, []string{*panel.FocusedLocation}) {
+		t.Fatalf("empty selection must fall back to cursor: %v", got)
+	}
+	panel.FocusedLocation = nil
+	if got := panel.effectiveSelection(); got == nil || len(got) != 0 {
+		t.Fatalf("missing selection and cursor must produce an empty array: %#v", got)
+	}
+}
+
 func TestCommandValidationAndUnsupportedTypes(t *testing.T) {
 	tests := []struct {
 		name string

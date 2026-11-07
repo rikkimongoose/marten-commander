@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { CANCEL_COMMAND, CommandDispatcher, CommandError, commandErrorMessage, snapshotContext, sourceAndTarget } from "../src/commands.ts";
+import { CANCEL_COMMAND, CommandDispatcher, CommandError, commandErrorMessage, effectiveSelection, snapshotContext, sourceAndTarget } from "../src/commands.ts";
 import { createCommandBackend } from "../src/commandBackend.ts";
 
 const location = value => Buffer.from(value).toString("base64url");
@@ -44,10 +44,25 @@ test("snapshot copies and freezes both panels and selections, without retaining 
   assert.throws(() => snapshot.right.selectedLocations.push("changed"), TypeError);
 });
 
-test("empty selection remains empty even when a row has focus", () => {
+test("context keeps explicit selection and cursor separate", () => {
   const input = context();
   input.left.selectedLocations = [];
   assert.deepEqual(snapshotContext(input).left, input.left);
+});
+
+test("commands use explicit selection before the independent cursor", () => {
+  const panel = snapshotContext(context()).left;
+  assert.deepEqual(effectiveSelection(panel), [location("/left/selected")]);
+  assert.notEqual(effectiveSelection(panel)[0], panel.focusedLocation);
+});
+
+test("commands fall back to the cursor only when explicit selection is empty", () => {
+  const input = context();
+  input.left.selectedLocations = [];
+  const panel = snapshotContext(input).left;
+  assert.deepEqual(effectiveSelection(panel), [location("/left/focused")]);
+  assert.throws(() => effectiveSelection(panel).push("changed"), TypeError);
+  assert.deepEqual(effectiveSelection({ ...panel, focusedLocation: null }), []);
 });
 
 test("snapshot is captured once before a dialog and reused after UI changes", async () => {

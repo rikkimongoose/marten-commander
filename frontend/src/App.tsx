@@ -5,6 +5,7 @@ import { AllCommunityModule } from "ag-grid-community";
 import { FilePanel, type FilePanelHandle } from "./FilePanel";
 import { CommandDispatcher, CommandError, commandErrorMessage, sourceAndTarget, type CommandId, type JsonObject, type PanelId } from "./commands";
 import { registerLocationCommand } from "./locationCommand";
+import { registerNavigationCommands } from "./navigationCommands";
 
 export default function App() {
   const [active, setActive] = useState<PanelId>("left");
@@ -32,6 +33,16 @@ export default function App() {
       const panel = id === "left" ? left.current : right.current;
       if (!panel) throw new CommandError("unavailable", "Панель недоступна.");
       panel.navigate(location, volumeId, home);
+    });
+    const panel = (id: PanelId) => {
+      const handle = id === "left" ? left.current : right.current;
+      if (!handle) throw new CommandError("unavailable", "Панель недоступна.");
+      return handle;
+    };
+    registerNavigationCommands(dispatcher, {
+      openEntry: (id, directory, rowId) => panel(id).openEntry(directory, rowId),
+      parent: (id, directory) => panel(id).parent(directory),
+      switchPanel: id => { activate(id); panel(id).focusList(); },
     });
     return dispatcher;
   });

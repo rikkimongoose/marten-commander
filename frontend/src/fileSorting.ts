@@ -1,4 +1,5 @@
 import type { Entry } from "../bindings/github.com/rikkimongoose/marten-commander/internal/desktop/models";
+import type { PanelRow } from "./panelRows.ts";
 
 export type SortField = "name" | "extension" | "size" | "modifiedAt";
 const collator = new Intl.Collator("ru", { numeric: true, sensitivity: "base" });
@@ -6,7 +7,8 @@ const compare = (a: string | bigint, b: string | bigint) => a < b ? -1 : a > b ?
 
 // AG Grid applies the final descending inversion. Compensate ONLY for grouping
 // so directories (including navigable links) remain first in both directions.
-export function compareEntries(a: Entry, b: Entry, field: SortField, descending: boolean): number {
+export function compareEntries(a: PanelRow, b: PanelRow, field: SortField, descending: boolean): number {
+  if (!!a.parent !== !!b.parent) return (a.parent ? -1 : 1) * (descending ? -1 : 1);
   if (a.navigable !== b.navigable) {
     return (a.navigable ? -1 : 1) * (descending ? -1 : 1);
   }

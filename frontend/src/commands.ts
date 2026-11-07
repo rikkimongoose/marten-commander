@@ -1,5 +1,5 @@
 export type PanelId = "left" | "right";
-export type CommandId = "panel.selectAll" | "panel.goToLocation";
+export type CommandId = "panel.selectAll" | "panel.goToLocation" | "panel.openEntry" | "panel.goToParent" | "panel.switch";
 
 // Locations are base64url-encoded absolute native paths, as in Directory/Entry
 // DTOs. Display strings cannot address files with escaped or non-UTF-8 names.
@@ -45,6 +45,15 @@ export function commandErrorMessage(error: unknown): string {
 
 export function sourceAndTarget(context: CommandContext) {
   return { source: context[context.activePanel], target: context[context.activePanel === "left" ? "right" : "left"] };
+}
+
+const noLocations: readonly string[] = Object.freeze([]);
+
+// File commands operate on the explicit Ctrl/Shift selection. When it is
+// empty, the row under the independent keyboard cursor is the sole operand.
+export function effectiveSelection(panel: PanelContext): readonly string[] {
+  if (panel.selectedLocations.length > 0) return panel.selectedLocations;
+  return panel.focusedLocation === null ? noLocations : Object.freeze([panel.focusedLocation]);
 }
 
 export function snapshotContext(context: CommandContext): CommandContext {

@@ -16,6 +16,19 @@ type PanelContext struct {
 	FocusedLocation   *string  `json:"focusedLocation"`
 }
 
+// effectiveSelection keeps the transport distinction between explicit row
+// selection and the keyboard cursor while giving file commands one rule for
+// choosing their operands.
+func (p PanelContext) effectiveSelection() []string {
+	if len(p.SelectedLocations) > 0 {
+		return p.SelectedLocations
+	}
+	if p.FocusedLocation != nil {
+		return []string{*p.FocusedLocation}
+	}
+	return []string{}
+}
+
 type CommandContext struct {
 	ActivePanel string       `json:"activePanel"`
 	Left        PanelContext `json:"left"`
