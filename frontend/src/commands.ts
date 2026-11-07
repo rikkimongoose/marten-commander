@@ -1,5 +1,6 @@
 export type PanelId = "left" | "right";
-export type CommandId = "panel.selectAll" | "panel.goToLocation" | "panel.openEntry" | "panel.goToParent" | "panel.switch" | "file.open";
+export type CommandId = "panel.selectAll" | "panel.goToLocation" | "panel.openEntry" | "panel.goToParent" | "panel.switch" |
+  "file.open" | "file.view" | "file.edit" | "file.copy" | "file.move" | "file.mkdir" | "file.delete";
 
 // Locations are base64url-encoded absolute native paths, as in Directory/Entry
 // DTOs. Display strings cannot address files with escaped or non-UTF-8 names.

@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { Alert, Box, CssBaseline } from "@mui/material";
 import { AgGridProvider } from "ag-grid-react";
 import { AllCommunityModule } from "ag-grid-community";
@@ -7,6 +7,7 @@ import { CommandDispatcher, CommandError, commandErrorMessage, sourceAndTarget, 
 import { registerLocationCommand } from "./locationCommand";
 import { registerNavigationCommands } from "./navigationCommands";
 import { registerFileCommands } from "./fileCommands";
+import { FunctionBar } from "./FunctionBar";
 
 export default function App() {
   const [active, setActive] = useState<PanelId>("left");
@@ -14,6 +15,8 @@ export default function App() {
   const left = useRef<FilePanelHandle>(null);
   const right = useRef<FilePanelHandle>(null);
   const [commandError, setCommandError] = useState("");
+  const [, setCommandContextVersion] = useState(0);
+  const commandContextChanged = useCallback(() => setCommandContextVersion(version => version + 1), []);
   const [commands] = useState(() => {
     const empty = () => ({ directoryLocation: null, selectedLocations: [], focusedLocation: null });
     const dispatcher = new CommandDispatcher(() => ({
@@ -65,9 +68,12 @@ export default function App() {
       <Box sx={{ height: "100vh", display: "flex", flexDirection: "column", p: 1, gap: 1 }}>
         {commandError && <Alert severity="error" onClose={() => setCommandError("")}>{commandError}</Alert>}
         <Box sx={{ display: "flex", flex: 1, minHeight: 0, gap: 1 }}>
-          <FilePanel ref={left} label="Левая панель" active={active === "left"} activate={() => activate("left")} dispatch={dispatch} />
-          <FilePanel ref={right} label="Правая панель" active={active === "right"} activate={() => activate("right")} dispatch={dispatch} />
+          <FilePanel ref={left} label="Левая панель" active={active === "left"} activate={() => activate("left")}
+            onContextChange={commandContextChanged} dispatch={dispatch} />
+          <FilePanel ref={right} label="Правая панель" active={active === "right"} activate={() => activate("right")}
+            onContextChange={commandContextChanged} dispatch={dispatch} />
         </Box>
+        <FunctionBar availability={id => commands.availability(id)} dispatch={dispatch} />
       </Box>
     </AgGridProvider>
   );

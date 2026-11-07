@@ -42,9 +42,10 @@ export interface FilePanelHandle {
   focusList(): void;
 }
 
-type FilePanelProps = { label: string; active: boolean; activate: () => void; dispatch: (id: CommandId, params?: JsonObject) => void };
+type FilePanelProps = { label: string; active: boolean; activate: () => void; onContextChange: () => void;
+  dispatch: (id: CommandId, params?: JsonObject) => void };
 
-export const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(function FilePanel({ label, active, activate, dispatch }, ref) {
+export const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(function FilePanel({ label, active, activate, onContextChange, dispatch }, ref) {
   const [directory, setDirectory] = useState<Directory>();
   const [selectedHome, setSelectedHome] = useState<HomeDirectory>();
   const [draft, setDraft] = useState("");
@@ -73,6 +74,7 @@ export const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(function Fi
   // external keyboard-cursor state changes. Redrawing rows updates classes and
   // preserves row nodes, explicit selection, sorting and scroll position.
   useEffect(() => { api.current?.redrawRows(); }, [focusedRow]);
+  useEffect(() => { onContextChange(); }, [directory, focusedRow, onContextChange]);
 
   useImperativeHandle(ref, () => ({
     navigate: (location, volumeId, home) => navigate({ path: "", location, volumeId, home }),
@@ -281,7 +283,10 @@ export const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(function Fi
           }}
           onFirstDataRendered={() => { gridRendered.current = true; restoreView(); }}
           onSortChanged={() => { if (!restore.current) restore.current = capture(); }}
-          onSelectionChanged={event => setSelectedCount(event.api.getSelectedNodes().length)}
+          onSelectionChanged={event => {
+            setSelectedCount(event.api.getSelectedNodes().length);
+            onContextChange();
+          }}
           onCellClicked={event => {
             const preserved = modifiedClickCursor.current;
             if (!preserved) return;

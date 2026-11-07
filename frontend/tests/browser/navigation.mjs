@@ -32,6 +32,22 @@ try {
       region.querySelectorAll(".ag-row.cursor-row").length === 1;
   }, { side, id });
   const count = async (side, n) => panel(side).getByText(new RegExp(`выделено ${n}(?:$| ·)`)).waitFor();
+  const functionBar = page.getByRole("navigation", { name: "Функциональные команды" });
+  const functionButtons = functionBar.getByRole("button");
+  assert.deepEqual(await functionButtons.allTextContents(), ["F3Просмотр", "F4Правка", "F5Копировать",
+    "F6Переместить", "F7Каталог", "F8Удалить"]);
+  for (let index = 0; index < 6; index++) assert.equal(await functionButtons.nth(index).isDisabled(), true);
+  await page.setViewportSize({ width: 600, height: 900 });
+  const compactBar = await functionBar.evaluate(element => ({ clientWidth: element.clientWidth,
+    scrollWidth: element.scrollWidth, buttonWidths: [...element.querySelectorAll("button")].map(button => button.getBoundingClientRect().width) }));
+  assert.ok(compactBar.scrollWidth > compactBar.clientWidth, "narrow bar scrolls instead of making labels unreadable");
+  assert.ok(compactBar.buttonWidths.every(width => width >= 96), "function buttons retain their readable minimum width");
+  await page.setViewportSize({ width: 1400, height: 900 });
+  const disabledOpens = await page.evaluate(() => window.navigationTest.opens.length);
+  await page.keyboard.press("F3");
+  assert.equal(await page.evaluate(() => window.navigationTest.opens.length), disabledOpens,
+    "disabled shortcut does not dispatch a command");
+  assert.equal(await page.getByRole("alert").count(), 0, "disabled shortcut reports no fake result or error");
   await path("left", home); await path("right", home);
   await focused("left", "..");
   await page.keyboard.press("Tab"); await focused("right", "..");
@@ -118,6 +134,29 @@ try {
   // Text editing must retain native Backspace/Tab behavior.
   const input = panel("left").getByRole("textbox");
   await input.fill("/tmp/x"); await input.press("Backspace"); assert.equal(await input.inputValue(), "/tmp/");
+  assert.equal(await input.evaluate(element => {
+    const event = new KeyboardEvent("keydown", { key: "F3", bubbles: true, cancelable: true });
+    element.dispatchEvent(event);
+    return event.defaultPrevented;
+  }), false, "function keys retain native behavior in text input");
+  assert.equal(await page.evaluate(() => {
+    const dialog = document.createElement("div");
+    dialog.setAttribute("role", "dialog");
+    document.body.append(dialog);
+    const event = new KeyboardEvent("keydown", { key: "F4", bubbles: true, cancelable: true });
+    document.body.dispatchEvent(event);
+    dialog.remove();
+    return event.defaultPrevented;
+  }), false, "function keys retain modal behavior");
+  assert.equal(await page.evaluate(() => {
+    const editor = document.createElement("div");
+    editor.className = "ag-cell-editing";
+    document.body.append(editor);
+    const event = new KeyboardEvent("keydown", { key: "F5", bubbles: true, cancelable: true });
+    document.body.dispatchEvent(event);
+    editor.remove();
+    return event.defaultPrevented;
+  }), false, "function keys retain AG Grid editor behavior");
   await input.press("Tab");
   assert.equal(await panel("left").getAttribute("data-active"), "true");
   assert.equal(await page.evaluate(() => document.activeElement?.textContent), "Перейти");
