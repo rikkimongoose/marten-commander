@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"strings"
 )
@@ -57,9 +58,19 @@ type CommandError struct {
 
 func (e *CommandError) Error() string { return e.Message }
 
-// CommandService is only the transport boundary. Real operation handlers will
-// be added individually; there is no registry, task manager or pretend success.
-type CommandService struct{}
+type fileOpenService interface {
+	Open(context.Context, string) error
+}
+
+// CommandService is the Wails transport boundary. It decodes opaque native
+// locations and delegates supported use cases to the application layer.
+type CommandService struct {
+	files fileOpenService
+}
+
+func NewCommandService(files fileOpenService) *CommandService {
+	return &CommandService{files: files}
+}
 
 func (s *CommandService) ExecuteCommand(ctx context.Context, request CommandRequest) error {
 	if err := ctx.Err(); err != nil {
@@ -78,7 +89,33 @@ func (s *CommandService) ExecuteCommand(ctx context.Context, request CommandRequ
 	if err := json.Unmarshal(request.Params, &params); err != nil || params == nil {
 		return &CommandError{"invalid_params", "Параметры команды должны быть JSON-объектом."}
 	}
+	if request.Type == "file.open" {
+		if len(params) != 1 {
+			return &CommandError{"invalid_params", "Команда открытия требует только адрес файла."}
+		}
+		var location string
+		if raw, ok := params["location"]; !ok || json.Unmarshal(raw, &location) != nil || location == "" {
+			return &CommandError{"invalid_params", "Не указан корректный адрес файла."}
+		}
+		path, ok := decodeLocation(location)
+		if !ok {
+			return &CommandError{"invalid_params", "Некорректный адрес файла."}
+		}
+		if s.files == nil {
+			return &CommandError{"unavailable", "Системное открытие файлов недоступно."}
+		}
+		if err := s.files.Open(ctx, path); err != nil {
+			return &CommandError{"open_failed", fmt.Sprintf("Не удалось открыть файл %q: %v", display(path), err)}
+		}
+		return nil
+	}
 	return &CommandError{"unknown_command", "Этот тип backend-команды пока не поддерживается."}
+}
+
+func decodeLocation(location string) (string, bool) {
+	path, err := base64.RawURLEncoding.Strict().DecodeString(location)
+	return string(path), err == nil && encode(string(path)) == location && filepath.IsAbs(string(path)) &&
+		!strings.ContainsRune(string(path), 0)
 }
 
 func validateCommandContext(c CommandContext) error {
@@ -87,10 +124,6 @@ func validateCommandContext(c CommandContext) error {
 	}
 	if c.ActivePanel != "left" && c.ActivePanel != "right" {
 		return invalid()
-	}
-	validLocation := func(location string) bool {
-		path, err := base64.RawURLEncoding.Strict().DecodeString(location)
-		return err == nil && encode(string(path)) == location && filepath.IsAbs(string(path)) && !strings.ContainsRune(string(path), 0)
 	}
 	for _, panel := range []PanelContext{c.Left, c.Right} {
 		if panel.SelectedLocations == nil {
@@ -102,16 +135,18 @@ func validateCommandContext(c CommandContext) error {
 			}
 			continue
 		}
-		if !validLocation(*panel.DirectoryLocation) {
+		if _, ok := decodeLocation(*panel.DirectoryLocation); !ok {
 			return invalid()
 		}
 		for _, location := range panel.SelectedLocations {
-			if !validLocation(location) {
+			if _, ok := decodeLocation(location); !ok {
 				return invalid()
 			}
 		}
-		if panel.FocusedLocation != nil && !validLocation(*panel.FocusedLocation) {
-			return invalid()
+		if panel.FocusedLocation != nil {
+			if _, ok := decodeLocation(*panel.FocusedLocation); !ok {
+				return invalid()
+			}
 		}
 	}
 	return nil

@@ -213,6 +213,17 @@ test("async binding rejection preserves typed Go errors and their message", asyn
   });
 });
 
+test("backend adapter preserves a displayable file-open failure", async () => {
+  const failure = new Error("Wails call failed", { cause: { code: "open_failed", message: "Нет системного обработчика" } });
+  const dispatcher = new CommandDispatcher(context);
+  dispatcher.register("file.open", { available, execute: createCommandBackend(async () => { throw failure; }) });
+  await assert.rejects(dispatcher.dispatch("file.open", { location: location("/left/file.txt") }), error => {
+    assert.equal(error.code, "open_failed");
+    assert.equal(commandErrorMessage(error), "Нет системного обработчика");
+    return true;
+  });
+});
+
 test("transport errors and rejected dialogs propagate without a successful result", async () => {
   for (const phase of ["prepare", "execute"]) {
     const dispatcher = new CommandDispatcher(context);

@@ -60,6 +60,7 @@ export const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(function Fi
   const current = useRef<string>();
   const modifiedClickCursor = useRef<{ rowId?: string; selectClicked: boolean }>();
   const ctrlActivatesPanel = useRef(false);
+  const doubleClickSelection = useRef<{ rowId: string; locations: string[] }>();
   const restore = useRef<View>();
   const gridRendered = useRef(false);
   const loader = useRef<DirectoryLoader<PanelNavigationRequest>>();
@@ -176,6 +177,7 @@ export const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(function Fi
   }
   function open(entry: PanelRow | undefined) {
     if (entry?.navigable) dispatch("panel.openEntry", { rowId: entry.id });
+    else if (entry?.kind === "file") dispatch("file.open", { location: entry.id });
   }
 
   return (
@@ -216,6 +218,20 @@ export const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(function Fi
       <Box ref={gridRoot} tabIndex={0} role="group" aria-label={`Файлы: ${label}`}
         onFocus={event => { if (event.target === gridRoot.current) focusList(); }}
         onMouseDownCapture={event => {
+          const row = event.target instanceof Element ? event.target.closest(".ag-row") : null;
+          const rowId = row?.getAttribute("row-id");
+          if (event.button === 0 && event.detail === 1) {
+            doubleClickSelection.current = undefined;
+          }
+          if (event.button === 0 && event.detail === 1 && !event.ctrlKey && !event.metaKey && !event.shiftKey && rowId) {
+            // A native double-click contains two ordinary clicks, and AG Grid
+            // selects the row on the first one. Keep the explicit selection
+            // from before that click so opening a file has no selection side effect.
+            doubleClickSelection.current = {
+              rowId,
+              locations: api.current?.getSelectedNodes().flatMap(node => fileLocation(node.data) ? [node.data!.id] : []) ?? [],
+            };
+          }
           if (event.button === 0 && (event.ctrlKey || event.metaKey || event.shiftKey) &&
             event.target instanceof Element && event.target.closest(".ag-cell")) {
             // AG Grid focuses the clicked cell before updating its row
@@ -290,7 +306,17 @@ export const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(function Fi
               setFocusedRow(current.current);
             }
           }}
-          onRowDoubleClicked={event => open(event.data)} />
+          onRowDoubleClicked={event => {
+            const saved = doubleClickSelection.current;
+            doubleClickSelection.current = undefined;
+            if (event.data?.kind === "file" && saved?.rowId === event.data.id) {
+              event.api.deselectAll();
+              for (const location of saved.locations) {
+                event.api.getRowNode(location)?.setSelected(true, false, "api");
+              }
+            }
+            open(event.data);
+          }} />
       </Box>
       <Typography sx={{ px: 1, py: 0.5, fontSize: 12 }}>
         {entries.length} элементов · выделено {selectedCount}{loading ? " · чтение…" : ""}

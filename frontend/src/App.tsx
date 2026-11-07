@@ -6,6 +6,7 @@ import { FilePanel, type FilePanelHandle } from "./FilePanel";
 import { CommandDispatcher, CommandError, commandErrorMessage, sourceAndTarget, type CommandId, type JsonObject, type PanelId } from "./commands";
 import { registerLocationCommand } from "./locationCommand";
 import { registerNavigationCommands } from "./navigationCommands";
+import { registerFileCommands } from "./fileCommands";
 
 export default function App() {
   const [active, setActive] = useState<PanelId>("left");
@@ -44,6 +45,7 @@ export default function App() {
       parent: (id, directory) => panel(id).parent(directory),
       switchPanel: id => { activate(id); panel(id).focusList(); },
     });
+    registerFileCommands(dispatcher);
     return dispatcher;
   });
 

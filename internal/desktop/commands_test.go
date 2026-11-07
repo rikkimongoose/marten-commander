@@ -21,6 +21,16 @@ func commandFixture(t *testing.T) CommandRequest {
 	}
 }
 
+type fileServiceStub struct {
+	seen string
+	err  error
+}
+
+func (s *fileServiceStub) Open(_ context.Context, path string) error {
+	s.seen = path
+	return s.err
+}
+
 func TestCommandSourceAndTarget(t *testing.T) {
 	request := commandFixture(t)
 	for _, active := range []string{"left", "right"} {
@@ -49,6 +59,49 @@ func TestCommandEffectiveSelection(t *testing.T) {
 	panel.FocusedLocation = nil
 	if got := panel.effectiveSelection(); got == nil || len(got) != 0 {
 		t.Fatalf("missing selection and cursor must produce an empty array: %#v", got)
+	}
+}
+
+func TestFileOpenCommandPassesExactDecodedLocation(t *testing.T) {
+	request := commandFixture(t)
+	path := filepath.Join(t.TempDir(), "отчёт с пробелами.txt")
+	request.Type = "file.open"
+	request.Params = json.RawMessage(`{"location":"` + encode(path) + `"}`)
+	files := &fileServiceStub{}
+	if err := NewCommandService(files).ExecuteCommand(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	if files.seen != path {
+		t.Fatalf("opened %q, want %q", files.seen, path)
+	}
+}
+
+func TestFileOpenCommandRejectsBadParametersAndReportsServiceErrors(t *testing.T) {
+	request := commandFixture(t)
+	request.Type = "file.open"
+	path := filepath.Join(t.TempDir(), "file.txt")
+	failure := errors.New("handler unavailable")
+	tests := []struct {
+		name   string
+		params string
+		files  fileOpenService
+		code   string
+	}{
+		{"missing location", `{}`, &fileServiceStub{}, "invalid_params"},
+		{"unknown parameter", `{"location":"` + encode(path) + `","other":true}`, &fileServiceStub{}, "invalid_params"},
+		{"invalid location", `{"location":"relative"}`, &fileServiceStub{}, "invalid_params"},
+		{"unavailable service", `{"location":"` + encode(path) + `"}`, nil, "unavailable"},
+		{"system handler error", `{"location":"` + encode(path) + `"}`, &fileServiceStub{err: failure}, "open_failed"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request.Params = json.RawMessage(test.params)
+			err := NewCommandService(test.files).ExecuteCommand(context.Background(), request)
+			var commandErr *CommandError
+			if !errors.As(err, &commandErr) || commandErr.Code != test.code || commandErr.Message == "" {
+				t.Fatalf("wanted %s, got %#v", test.code, err)
+			}
+		})
 	}
 }
 

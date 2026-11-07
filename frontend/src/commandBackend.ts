@@ -19,7 +19,8 @@ export function createCommandBackend(binding?: ExecuteBinding) {
       // Wails RuntimeError exposes the JSON-marshalled Go error as its cause.
       const cause = error instanceof Error && "cause" in error ? error.cause : undefined;
       if (cause && typeof cause === "object" && "code" in cause && "message" in cause && typeof cause.message === "string" &&
-        (cause.code === "unknown_command" || cause.code === "invalid_request" || cause.code === "invalid_context" || cause.code === "invalid_params")) {
+        (cause.code === "unknown_command" || cause.code === "invalid_request" || cause.code === "invalid_context" || cause.code === "invalid_params" ||
+          cause.code === "unavailable" || cause.code === "open_failed")) {
         throw new CommandError(cause.code, cause.message, error);
       }
       throw error;

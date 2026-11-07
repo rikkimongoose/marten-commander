@@ -8,7 +8,7 @@ import react from "@vitejs/plugin-react";
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || "playwright-core");
 const server = await createServer({
   configFile: false, root: fileURLToPath(new URL("../../", import.meta.url)), plugins: [react()],
-  resolve: { alias: [{ find: /.*bindings\/.*\/desktop\/(directoryservice|volumeservice)(\.[jt]s)?$/,
+  resolve: { alias: [{ find: /.*bindings\/.*\/desktop\/(commandservice|directoryservice|volumeservice)(\.[jt]s)?$/,
     replacement: fileURLToPath(new URL("navigationBackend.ts", import.meta.url)) }] },
   server: { host: "127.0.0.1", port: 0 },
 });
@@ -66,18 +66,37 @@ try {
   await page.keyboard.press("ArrowUp"); await focused("left", `${home}/denied`); await count("left", 3);
   await page.keyboard.press("ArrowDown"); await focused("left", `${home}/one.txt`); await count("left", 3);
   const reads = await page.evaluate(() => window.navigationTest.reads.length);
+  const opens = await page.evaluate(() => window.navigationTest.opens.length);
   await page.keyboard.press("Enter");
-  assert.equal(await page.evaluate(() => window.navigationTest.reads.length), reads, "Enter on a file does not read/open it");
+  await page.waitForFunction(count => window.navigationTest.opens.length === count + 1, opens);
+  assert.equal(await page.evaluate(() => window.navigationTest.opens.at(-1).type), "file.open");
+  assert.equal(await page.evaluate(() => window.navigationTest.opens.at(-1).params.location), `${home}/one.txt`);
+  assert.equal(await page.evaluate(() => window.navigationTest.reads.length), reads, "opening a file does not navigate");
+  await count("left", 3);
+  await cell("left", `${home}/two.txt`).click({ modifiers: ["Control"] }); await count("left", 2);
+  await focused("left", `${home}/one.txt`);
+  await cell("left", `${home}/two.txt`).dblclick();
+  await page.waitForFunction(count => window.navigationTest.opens.length === count + 2, opens);
+  assert.equal(await page.evaluate(() => window.navigationTest.opens.at(-1).params.location), `${home}/two.txt`);
+  assert.equal(await page.evaluate(() => window.navigationTest.reads.length), reads, "double-click uses file.open instead of navigation");
+  await focused("left", `${home}/two.txt`); await count("left", 2);
+  assert.deepEqual(await panel("left").locator(".ag-row.ag-row-selected").evaluateAll(rows => rows.map(row => row.getAttribute("row-id")).sort()),
+    [`${home}/one.txt`, `${home}/three.txt`], "double-click does not add the opened file to explicit selection");
   await page.keyboard.press("Control+a"); await count("left", 5);
   assert.notEqual(await panel("left").locator('.ag-row[row-id=".."]').getAttribute("aria-selected"), "true");
+  await page.evaluate(() => { window.navigationTest.openError = "Нет системного обработчика для файла."; });
+  await page.keyboard.press("Enter");
+  await page.getByText("Нет системного обработчика для файла.").waitFor();
+  await path("left", home); await focused("left", `${home}/two.txt`); await count("left", 5);
+  await page.evaluate(() => { window.navigationTest.openError = ""; });
 
   await page.keyboard.press("Tab"); await focused("right", "..");
   assert.equal(await panel("right").getAttribute("data-active"), "true");
   assert.equal(await panel("left").getAttribute("data-active"), "false");
-  await page.keyboard.press("Shift+Tab"); await focused("left", `${home}/one.txt`); await count("left", 5);
+  await page.keyboard.press("Shift+Tab"); await focused("left", `${home}/two.txt`); await count("left", 5);
   await page.keyboard.press("Control+r");
   await panel("left").getByRole("progressbar", { name: "Чтение: Левая панель" }).waitFor({ state: "hidden" });
-  await focused("left", `${home}/one.txt`); await count("left", 5);
+  await focused("left", `${home}/two.txt`); await count("left", 5);
   await cell("left", `${home}/child`).dblclick(); await path("left", `${home}/child`); await count("left", 0);
   await page.keyboard.press("Backspace"); await path("left", home); await count("left", 0);
 

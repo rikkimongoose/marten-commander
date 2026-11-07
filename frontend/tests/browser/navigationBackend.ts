@@ -5,7 +5,8 @@ const entry = (id: string, directory = false) => ({ id, name: id.split("/").at(-
   extension: directory ? "" : "txt", size: directory ? "" : "5", modifiedAt: "2026-01-01T00:00:00.000000000Z", detail: "" });
 const home = "/home/test";
 const initialRoot = new URLSearchParams(window.location.search).has("emptyRoot");
-const state = { reads: [] as string[], hold: "", release: undefined as (() => void) | undefined, emptyRoot: initialRoot };
+const state = { reads: [] as string[], opens: [] as any[], openError: "", hold: "",
+  release: undefined as (() => void) | undefined, emptyRoot: initialRoot };
 Object.assign(window, { navigationTest: state });
 
 export async function ReadDirectory(request: { path: string; location: string }) {
@@ -29,3 +30,9 @@ export async function GetVolumeInfo() {
     space: { total: "1000", free: "400", available: "400", used: "600" } };
 }
 export async function ListVolumes() { return [await GetVolumeInfo()]; }
+export async function ExecuteCommand(request: any) {
+  state.opens.push(request);
+  if (state.openError) throw new Error("Wails command failed", {
+    cause: { code: "open_failed", message: state.openError },
+  });
+}
