@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
 )
@@ -58,17 +61,18 @@ type CommandError struct {
 
 func (e *CommandError) Error() string { return e.Message }
 
-type fileOpenService interface {
+type fileCommandService interface {
 	Open(context.Context, string) error
+	CreateDirectory(context.Context, string, string) error
 }
 
 // CommandService is the Wails transport boundary. It decodes opaque native
 // locations and delegates supported use cases to the application layer.
 type CommandService struct {
-	files fileOpenService
+	files fileCommandService
 }
 
-func NewCommandService(files fileOpenService) *CommandService {
+func NewCommandService(files fileCommandService) *CommandService {
 	return &CommandService{files: files}
 }
 
@@ -106,6 +110,46 @@ func (s *CommandService) ExecuteCommand(ctx context.Context, request CommandRequ
 		}
 		if err := s.files.Open(ctx, path); err != nil {
 			return &CommandError{"open_failed", fmt.Sprintf("Не удалось открыть файл %q: %v", display(path), err)}
+		}
+		return nil
+	}
+	if request.Type == "file.mkdir" {
+		if len(params) != 1 {
+			return &CommandError{"invalid_params", "Команда создания каталога требует только имя."}
+		}
+		var name string
+		if raw, ok := params["name"]; !ok || json.Unmarshal(raw, &name) != nil ||
+			strings.TrimSpace(name) == "" || name == "." || name == ".." || filepath.IsAbs(name) ||
+			filepath.VolumeName(name) != "" || strings.ContainsRune(name, os.PathSeparator) ||
+			strings.ContainsRune(name, 0) || filepath.Base(name) != name {
+			return &CommandError{"invalid_params", "Не указано корректное имя каталога."}
+		}
+		source, _ := request.Context.sourceAndTarget()
+		if source.DirectoryLocation == nil {
+			return &CommandError{"unavailable", "Каталог назначения ещё не открыт."}
+		}
+		parent, ok := decodeLocation(*source.DirectoryLocation)
+		if !ok {
+			return &CommandError{"invalid_context", "Некорректный адрес каталога назначения."}
+		}
+		if s.files == nil {
+			return &CommandError{"unavailable", "Создание каталогов недоступно."}
+		}
+		if err := s.files.CreateDirectory(ctx, parent, name); err != nil {
+			switch {
+			case errors.Is(err, fs.ErrInvalid):
+				return &CommandError{"invalid_params", "Имя должно быть одним непустым компонентом пути, отличным от «.» и «..»."}
+			case errors.Is(err, fs.ErrExist):
+				return &CommandError{"mkdir_failed", fmt.Sprintf("Каталог %q уже существует.", name)}
+			case errors.Is(err, fs.ErrNotExist):
+				return &CommandError{"mkdir_failed", "Каталог назначения больше не существует."}
+			case errors.Is(err, fs.ErrPermission):
+				return &CommandError{"mkdir_failed", fmt.Sprintf("Недостаточно прав для создания каталога в %q.", display(parent))}
+			case errors.Is(err, errors.ErrUnsupported):
+				return &CommandError{"unavailable", "Эта файловая система не поддерживает создание каталогов."}
+			default:
+				return &CommandError{"mkdir_failed", fmt.Sprintf("Не удалось создать каталог %q: %v", name, err)}
+			}
 		}
 		return nil
 	}

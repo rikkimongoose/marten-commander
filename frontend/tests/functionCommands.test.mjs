@@ -19,15 +19,15 @@ test("function bar has the approved F3-F8 commands in order", () => {
   ]);
 });
 
-test("button and keyboard paths invoke the same available command", () => {
+test("F7 button and keyboard paths invoke the same available mkdir command", () => {
   const calls = [];
   const availability = () => ({ enabled: true });
   const dispatch = id => calls.push(id);
-  invokeFunctionCommand("file.view", availability, dispatch);
-  const shortcut = functionCommandForKey(key("F3"), false);
-  assert.equal(shortcut, "file.view");
+  invokeFunctionCommand("file.mkdir", availability, dispatch);
+  const shortcut = functionCommandForKey(key("F7"), false);
+  assert.equal(shortcut, "file.mkdir");
   invokeFunctionCommand(shortcut, availability, dispatch);
-  assert.deepEqual(calls, ["file.view", "file.view"]);
+  assert.deepEqual(calls, ["file.mkdir", "file.mkdir"]);
 });
 
 test("missing and context-disabled handlers cannot be invoked and availability reacts to context", async () => {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -22,12 +23,19 @@ func commandFixture(t *testing.T) CommandRequest {
 }
 
 type fileServiceStub struct {
-	seen string
-	err  error
+	seen          string
+	createdParent string
+	createdName   string
+	err           error
 }
 
 func (s *fileServiceStub) Open(_ context.Context, path string) error {
 	s.seen = path
+	return s.err
+}
+
+func (s *fileServiceStub) CreateDirectory(_ context.Context, parent, name string) error {
+	s.createdParent, s.createdName = parent, name
 	return s.err
 }
 
@@ -84,7 +92,7 @@ func TestFileOpenCommandRejectsBadParametersAndReportsServiceErrors(t *testing.T
 	tests := []struct {
 		name   string
 		params string
-		files  fileOpenService
+		files  fileCommandService
 		code   string
 	}{
 		{"missing location", `{}`, &fileServiceStub{}, "invalid_params"},
@@ -97,6 +105,54 @@ func TestFileOpenCommandRejectsBadParametersAndReportsServiceErrors(t *testing.T
 		t.Run(test.name, func(t *testing.T) {
 			request.Params = json.RawMessage(test.params)
 			err := NewCommandService(test.files).ExecuteCommand(context.Background(), request)
+			var commandErr *CommandError
+			if !errors.As(err, &commandErr) || commandErr.Code != test.code || commandErr.Message == "" {
+				t.Fatalf("wanted %s, got %#v", test.code, err)
+			}
+		})
+	}
+}
+
+func TestMkdirCommandUsesSnapshotSourceDirectory(t *testing.T) {
+	request := commandFixture(t)
+	request.Type = "file.mkdir"
+	request.Params = json.RawMessage(`{"name":"Каталог с пробелами 🦊"}`)
+	files := &fileServiceStub{}
+	if err := NewCommandService(files).ExecuteCommand(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	want, _ := decodeLocation(*request.Context.Left.DirectoryLocation)
+	if files.createdParent != want || files.createdName != "Каталог с пробелами 🦊" {
+		t.Fatalf("CreateDirectory(%q, %q), want (%q, exact name)", files.createdParent, files.createdName, want)
+	}
+	if files.seen != "" {
+		t.Fatalf("mkdir unexpectedly opened %q", files.seen)
+	}
+}
+
+func TestMkdirCommandValidatesAndClassifiesErrors(t *testing.T) {
+	request := commandFixture(t)
+	request.Type = "file.mkdir"
+	tests := []struct {
+		name   string
+		params string
+		err    error
+		code   string
+	}{
+		{"empty", `{"name":""}`, nil, "invalid_params"},
+		{"dot", `{"name":"."}`, nil, "invalid_params"},
+		{"dotdot", `{"name":".."}`, nil, "invalid_params"},
+		{"nested", `{"name":"nested/child"}`, nil, "invalid_params"},
+		{"unknown parameter", `{"name":"child","other":true}`, nil, "invalid_params"},
+		{"exists", `{"name":"child"}`, fs.ErrExist, "mkdir_failed"},
+		{"parent removed", `{"name":"child"}`, fs.ErrNotExist, "mkdir_failed"},
+		{"permission", `{"name":"child"}`, fs.ErrPermission, "mkdir_failed"},
+		{"other", `{"name":"child"}`, errors.New("disk error"), "mkdir_failed"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request.Params = json.RawMessage(test.params)
+			err := NewCommandService(&fileServiceStub{err: test.err}).ExecuteCommand(context.Background(), request)
 			var commandErr *CommandError
 			if !errors.As(err, &commandErr) || commandErr.Code != test.code || commandErr.Message == "" {
 				t.Fatalf("wanted %s, got %#v", test.code, err)

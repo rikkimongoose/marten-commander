@@ -46,7 +46,7 @@ try {
   const functionButtons = functionBar.getByRole("button");
   assert.deepEqual(await functionButtons.allTextContents(), ["F3Просмотр", "F4Правка", "F5Копировать",
     "F6Переместить", "F7Каталог", "F8Удалить"]);
-  for (let index = 0; index < 6; index++) assert.equal(await functionButtons.nth(index).isDisabled(), true);
+  for (const index of [0, 1, 2, 3, 5]) assert.equal(await functionButtons.nth(index).isDisabled(), true);
   await page.setViewportSize({ width: 600, height: 900 });
   const compactBar = await functionBar.evaluate(element => ({ clientWidth: element.clientWidth,
     scrollWidth: element.scrollWidth, buttonWidths: [...element.querySelectorAll("button")].map(button => button.getBoundingClientRect().width) }));
@@ -63,6 +63,8 @@ try {
     "disabled shortcut does not dispatch a command");
   assert.equal(await page.getByRole("alert").count(), 0, "disabled shortcut reports no fake result or error");
   await path("left", home); await path("right", home);
+  const mkdirButton = functionBar.getByRole("button", { name: /F7.*Каталог/ });
+  assert.equal(await mkdirButton.isDisabled(), false, "F7 becomes available after the source directory loads");
   assert.equal(await panel("left").getByText(/^Левая панель:/).count(), 0);
   assert.equal(await panel("right").getByText(/^Правая панель:/).count(), 0);
   const commandInput = commandForm.getByRole("textbox", { name: "Команда" });
@@ -275,8 +277,53 @@ try {
   await focused("right", `${home}/one.txt`); await count("right", 1);
   await page.waitForFunction(home => document.querySelector('form[aria-label="Командная строка"] p')?.textContent === `${home} >`, home);
   assert.equal(await panel("right").locator(`.ag-row[row-id="${home}/one.txt"]`).getAttribute("aria-selected"), "true");
+
+  // F7 and its button share file.mkdir. The modal owns text keys, keeps the
+  // captured destination, reports backend errors in place and refreshes only
+  // the source panel with the created directory under the cursor.
+  const openMkdir = async viaKeyboard => {
+    if (viaKeyboard) await page.keyboard.press("F7"); else await mkdirButton.click();
+    const dialog = page.getByRole("dialog", { name: "Создать каталог" });
+    await dialog.waitFor();
+    const input = dialog.getByRole("textbox", { name: "Имя нового каталога" });
+    await page.waitForFunction(() => document.activeElement instanceof HTMLInputElement &&
+      !!document.activeElement.closest('[role="dialog"]'));
+    assert.equal(await input.evaluate(element => element === document.activeElement), true, "mkdir name receives focus");
+    assert.match(await dialog.textContent(), new RegExp(`Каталог назначения: ${home}`));
+    return { dialog, input };
+  };
+  let mkdir = await openMkdir(true);
+  assert.equal(await mkdir.dialog.getByRole("button", { name: "Создать" }).isDisabled(), true);
+  await page.evaluate(() => { window.navigationTest.holdMkdir = true; });
+  await mkdir.input.fill("Создан F7 🦊"); await mkdir.input.press("Enter");
+  const mkdirRequests = await page.evaluate(() => window.navigationTest.opens.filter(request => request.type === "file.mkdir").length);
+  assert.equal(await mkdir.dialog.getByRole("button", { name: "Создать" }).isDisabled(), true, "confirmation is disabled while mkdir runs");
+  assert.equal(await mkdir.dialog.getByRole("button", { name: "Отмена" }).isDisabled(), true, "cancellation is disabled while mkdir runs");
+  await page.keyboard.press("Enter");
+  assert.equal(await page.evaluate(() => window.navigationTest.opens.filter(request => request.type === "file.mkdir").length), mkdirRequests,
+    "Enter cannot submit mkdir twice while it is running");
+  await page.evaluate(() => { window.navigationTest.holdMkdir = false; window.navigationTest.releaseMkdir?.(); });
+  await mkdir.dialog.waitFor({ state: "hidden" });
+  await cell("right", `${home}/Создан F7 🦊`).waitFor(); await focused("right", `${home}/Создан F7 🦊`); await count("right", 1);
+  assert.equal(await cell("left", `${home}/Создан F7 🦊`).count(), 0, "mkdir refreshes only the source panel");
+  assert.deepEqual(await page.evaluate(() => window.navigationTest.mkdirs.at(-1)), { parent: home, name: "Создан F7 🦊" });
+
+  const mkdirCount = await page.evaluate(() => window.navigationTest.mkdirs.length);
+  mkdir = await openMkdir(false);
+  await mkdir.input.fill("Отменён"); await mkdir.input.press("Escape");
+  await mkdir.dialog.waitFor({ state: "hidden" });
+  assert.equal(await page.evaluate(() => window.navigationTest.mkdirs.length), mkdirCount, "Escape creates nothing");
+
+  mkdir = await openMkdir(false);
+  await mkdir.input.fill("Создан F7 🦊"); await mkdir.input.press("Enter");
+  await mkdir.dialog.getByText("Каталог «Создан F7 🦊» уже существует.").waitFor();
+  assert.equal(await mkdir.dialog.isVisible(), true, "backend error keeps mkdir dialog open");
+  await mkdir.input.fill("Создан кнопкой"); await mkdir.input.press("Enter");
+  await mkdir.dialog.waitFor({ state: "hidden" });
+  await cell("right", `${home}/Создан кнопкой`).waitFor(); await focused("right", `${home}/Создан кнопкой`);
+  assert.deepEqual(await page.evaluate(() => window.navigationTest.mkdirs.at(-1)), { parent: home, name: "Создан кнопкой" });
   assert.deepEqual(errors, []);
-  console.log("PASS: real AG Grid navigation, cursor, Ctrl/Shift selection, Tab, root, permission errors and async focus");
+  console.log("PASS: AG Grid navigation, selection, focus, errors and F7 mkdir dialog");
 } finally {
   await browser?.close();
   await server.close();

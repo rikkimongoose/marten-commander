@@ -6,7 +6,9 @@ const entry = (id: string, directory = false) => ({ id, name: id.split("/").at(-
 const home = "/home/test";
 const initialRoot = new URLSearchParams(window.location.search).has("emptyRoot");
 const state = { reads: [] as string[], opens: [] as any[], openError: "", hold: "",
-  release: undefined as (() => void) | undefined, emptyRoot: initialRoot };
+  release: undefined as (() => void) | undefined, emptyRoot: initialRoot,
+  mkdirs: [] as { parent: string; name: string }[], created: new Map<string, string[]>(), holdMkdir: false,
+  releaseMkdir: undefined as (() => void) | undefined };
 Object.assign(window, { navigationTest: state });
 
 function resolve(path: string, base: string) {
@@ -32,6 +34,7 @@ export async function ReadDirectory(request: { path: string; location: string; b
     : path === "/home" ? [entry(home, true)]
     : path === "/" && !state.emptyRoot ? [entry("/home", true)]
     : path === `${home}/child` ? [entry(`${path}/nested`, true), entry(`${path}/inside.txt`)] : [];
+  entries.push(...(state.created.get(path) ?? []).map(name => entry(`${path}/${name}`, true)));
   return { location: path, parentLocation: parent, displayPath: path, entries,
     initialHome: !initialRoot && !request.path && !request.location, ancestorLocations: path.startsWith(home + "/") ? [home, "/home", "/"] : [parent] };
 }
@@ -44,6 +47,20 @@ export async function GetVolumeInfo() {
 export async function ListVolumes() { return [await GetVolumeInfo()]; }
 export async function ExecuteCommand(request: any) {
   state.opens.push(request);
+  if (request.type === "file.mkdir") {
+    if (state.holdMkdir) await new Promise<void>(resolve => { state.releaseMkdir = resolve; });
+    const panel = request.context[request.context.activePanel];
+    const parent = panel.directoryLocation;
+    const name = request.params.name;
+    const names = state.created.get(parent) ?? [];
+    if (names.includes(name)) throw new Error("Wails command failed", {
+      cause: { code: "mkdir_failed", message: `Каталог «${name}» уже существует.` },
+    });
+    names.push(name);
+    state.created.set(parent, names);
+    state.mkdirs.push({ parent, name });
+    return;
+  }
   if (state.openError) throw new Error("Wails command failed", {
     cause: { code: "open_failed", message: state.openError },
   });

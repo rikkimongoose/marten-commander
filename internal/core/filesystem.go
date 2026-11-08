@@ -70,3 +70,9 @@ type LinkReader interface {
 type PathResolver interface {
 	ResolvePath(ctx context.Context, path string) (string, error)
 }
+
+// DirectoryCreator is a narrow optional write capability. Name must be one
+// provider-native path component; implementations must not create parents.
+type DirectoryCreator interface {
+	CreateDirectory(ctx context.Context, parent, name string) error
+}

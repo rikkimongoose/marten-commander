@@ -3,13 +3,18 @@ import { Alert, Box, CssBaseline } from "@mui/material";
 import { AgGridProvider } from "ag-grid-react";
 import { AllCommunityModule } from "ag-grid-community";
 import { FilePanel, type FilePanelHandle } from "./FilePanel";
-import { CommandDispatcher, CommandError, commandErrorMessage, sourceAndTarget, type CommandId, type JsonObject, type PanelId } from "./commands";
+import { CANCEL_COMMAND, CommandDispatcher, CommandError, commandErrorMessage, sourceAndTarget,
+  type CommandContext, type CommandId, type JsonObject, type PanelId } from "./commands";
 import { registerHomeCommand, registerLocationCommand, registerPathCommand } from "./locationCommand";
 import { registerNavigationCommands } from "./navigationCommands";
 import { registerFileCommands } from "./fileCommands";
 import { FunctionBar } from "./FunctionBar";
 import { CommandLine } from "./CommandLine";
 import { GetHomeDirectory } from "../bindings/github.com/rikkimongoose/marten-commander/internal/desktop/volumeservice";
+import { MkdirDialog } from "./MkdirDialog";
+import type { MkdirPromptResult } from "./fileCommands";
+
+type MkdirDialogState = { open: boolean; destination: string; busy: boolean; error: string };
 
 export default function App() {
   const [active, setActive] = useState<PanelId>("left");
@@ -17,6 +22,8 @@ export default function App() {
   const left = useRef<FilePanelHandle>(null);
   const right = useRef<FilePanelHandle>(null);
   const [commandError, setCommandError] = useState("");
+  const [mkdirDialog, setMkdirDialog] = useState<MkdirDialogState>({ open: false, destination: "", busy: false, error: "" });
+  const mkdirResolve = useRef<((result: MkdirPromptResult) => void)>();
   const [, setCommandContextVersion] = useState(0);
   const commandContextChanged = useCallback(() => setCommandContextVersion(version => version + 1), []);
   const [commands] = useState(() => {
@@ -52,7 +59,13 @@ export default function App() {
     });
     registerPathCommand(dispatcher, (id, path, baseLocation) => panel(id).navigatePath(path, baseLocation));
     registerHomeCommand(dispatcher, GetHomeDirectory, (id, location) => panel(id).navigate(location, undefined, true));
-    registerFileCommands(dispatcher);
+    registerFileCommands(dispatcher, undefined, {
+      prompt: { open: openMkdirDialog, retry: retryMkdirDialog, complete: closeMkdirDialog },
+      succeeded: (request, name) => {
+        const directory = sourceAndTarget(request.context).source.directoryLocation;
+        if (directory) panel(request.context.activePanel).refreshCreated(directory, name);
+      },
+    });
     return dispatcher;
   });
 
@@ -69,6 +82,33 @@ export default function App() {
   function focusActivePanel() {
     (activeRef.current === "left" ? left.current : right.current)?.focusList();
   }
+  function openMkdirDialog(context: CommandContext): Promise<MkdirPromptResult> {
+    const handle = context.activePanel === "left" ? left.current : right.current;
+    setMkdirDialog({ open: true, destination: handle?.getDisplayPath() ?? "", busy: false, error: "" });
+    return new Promise(resolve => { mkdirResolve.current = resolve; });
+  }
+  function retryMkdirDialog(message: string): Promise<MkdirPromptResult> {
+    setMkdirDialog(value => ({ ...value, busy: false, error: message }));
+    return new Promise(resolve => { mkdirResolve.current = resolve; });
+  }
+  function closeMkdirDialog() {
+    mkdirResolve.current = undefined;
+    setMkdirDialog(value => ({ ...value, open: false, busy: false, error: "" }));
+  }
+  function submitMkdir(name: string) {
+    const resolve = mkdirResolve.current;
+    if (!resolve || mkdirDialog.busy) return;
+    mkdirResolve.current = undefined;
+    setMkdirDialog(value => ({ ...value, busy: true, error: "" }));
+    resolve({ name });
+  }
+  function cancelMkdir() {
+    const resolve = mkdirResolve.current;
+    if (mkdirDialog.busy) return;
+    mkdirResolve.current = undefined;
+    setMkdirDialog(value => ({ ...value, open: false, error: "" }));
+    resolve?.(CANCEL_COMMAND);
+  }
   const activePath = (active === "left" ? left.current : right.current)?.getDisplayPath() ?? "";
   return (
     <AgGridProvider modules={[AllCommunityModule]}>
@@ -83,6 +123,7 @@ export default function App() {
         </Box>
         <CommandLine path={activePath} dispatch={dispatch} report={setCommandError} returnToPanel={focusActivePanel} />
         <FunctionBar availability={id => commands.availability(id)} dispatch={dispatch} />
+        <MkdirDialog {...mkdirDialog} submit={submitMkdir} cancel={cancelMkdir} closed={focusActivePanel} />
       </Box>
     </AgGridProvider>
   );
