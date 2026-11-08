@@ -25,7 +25,7 @@ export function VolumeBar({ label, directory, selectedHome, choose }: Props) {
     if (location) {
       Promise.resolve().then(() => {
         if (!current) return;
-        call = GetVolumeInfo({ path: "", location });
+        call = GetVolumeInfo({ path: "", location, baseLocation: "" });
         return call;
       }).then(
         volume => { if (current && volume) setInfo({ location, volume }); },

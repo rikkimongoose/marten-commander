@@ -4,10 +4,12 @@ import { AgGridProvider } from "ag-grid-react";
 import { AllCommunityModule } from "ag-grid-community";
 import { FilePanel, type FilePanelHandle } from "./FilePanel";
 import { CommandDispatcher, CommandError, commandErrorMessage, sourceAndTarget, type CommandId, type JsonObject, type PanelId } from "./commands";
-import { registerLocationCommand } from "./locationCommand";
+import { registerHomeCommand, registerLocationCommand, registerPathCommand } from "./locationCommand";
 import { registerNavigationCommands } from "./navigationCommands";
 import { registerFileCommands } from "./fileCommands";
 import { FunctionBar } from "./FunctionBar";
+import { CommandLine } from "./CommandLine";
+import { GetHomeDirectory } from "../bindings/github.com/rikkimongoose/marten-commander/internal/desktop/volumeservice";
 
 export default function App() {
   const [active, setActive] = useState<PanelId>("left");
@@ -48,6 +50,8 @@ export default function App() {
       parent: (id, directory) => panel(id).parent(directory),
       switchPanel: id => { activate(id); panel(id).focusList(); },
     });
+    registerPathCommand(dispatcher, (id, path, baseLocation) => panel(id).navigatePath(path, baseLocation));
+    registerHomeCommand(dispatcher, GetHomeDirectory, (id, location) => panel(id).navigate(location, undefined, true));
     registerFileCommands(dispatcher);
     return dispatcher;
   });
@@ -62,6 +66,7 @@ export default function App() {
     setCommandError("");
     void commands.dispatch(id, params).catch(error => setCommandError(commandErrorMessage(error)));
   }
+  const activePath = (active === "left" ? left.current : right.current)?.getDisplayPath() ?? "";
   return (
     <AgGridProvider modules={[AllCommunityModule]}>
       <CssBaseline />
@@ -73,6 +78,7 @@ export default function App() {
           <FilePanel ref={right} label="Правая панель" active={active === "right"} activate={() => activate("right")}
             onContextChange={commandContextChanged} dispatch={dispatch} />
         </Box>
+        <CommandLine path={activePath} dispatch={dispatch} report={setCommandError} />
         <FunctionBar availability={id => commands.availability(id)} dispatch={dispatch} />
       </Box>
     </AgGridProvider>

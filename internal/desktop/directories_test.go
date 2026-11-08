@@ -77,7 +77,9 @@ func TestDTOAndOpaquePathsRoundTrip(t *testing.T) {
 func TestInvalidRequestAndErrors(t *testing.T) {
 	provider := &source{}
 	service := NewDirectoryService(app.NewDirectoryService(provider, provider, t.TempDir()), false)
-	for _, request := range []DirectoryRequest{{Location: "!invalid"}, {Path: "/tmp", Location: encode("/tmp")}} {
+	for _, request := range []DirectoryRequest{{Location: "!invalid"}, {Path: "/tmp", Location: encode("/tmp")},
+		{Path: "child", Location: encode("/tmp"), BaseLocation: encode("/tmp")}, {BaseLocation: encode("/tmp")},
+		{Path: "child", BaseLocation: "!invalid"}} {
 		if _, err := service.ReadDirectory(context.Background(), request); err == nil {
 			t.Fatalf("accepted invalid request: %+v", request)
 		}
@@ -91,6 +93,27 @@ func TestInvalidRequestAndErrors(t *testing.T) {
 	_, err = service.ReadDirectory(context.Background(), DirectoryRequest{})
 	if strings.Contains(err.Error(), "\n") {
 		t.Fatalf("unescaped error: %q", err)
+	}
+}
+
+func TestTypedRelativePathUsesOpaqueBaseLocation(t *testing.T) {
+	base := filepath.Join(t.TempDir(), "base-\xff")
+	provider := &source{}
+	service := NewDirectoryService(app.NewDirectoryService(provider, provider, base), false)
+	result, err := service.ReadDirectory(context.Background(), DirectoryRequest{Path: filepath.Join("child", "..", "target"), BaseLocation: encode(base)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(base, "target")
+	if provider.seen != want || result.DisplayPath != display(want) {
+		t.Fatalf("relative path = %q (%q), want %q", provider.seen, result.DisplayPath, want)
+	}
+	abs := filepath.Join(t.TempDir(), "absolute")
+	if _, err := service.ReadDirectory(context.Background(), DirectoryRequest{Path: abs, BaseLocation: encode(base)}); err != nil {
+		t.Fatal(err)
+	}
+	if provider.seen != abs {
+		t.Fatalf("absolute path changed: %q", provider.seen)
 	}
 }
 

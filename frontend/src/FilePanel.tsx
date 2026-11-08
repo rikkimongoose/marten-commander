@@ -1,5 +1,5 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
-import { Alert, Box, Button, Checkbox, FormControlLabel, LinearProgress, TextField, Typography } from "@mui/material";
+import { Alert, Box, Button, ButtonBase, Checkbox, FormControlLabel, LinearProgress, TextField, Typography } from "@mui/material";
 import { alpha } from "@mui/material/styles";
 import { AgGridReact } from "ag-grid-react";
 import type { ColDef, GridApi } from "ag-grid-community";
@@ -35,8 +35,10 @@ type View = { current?: string; index: number; top?: string; topIndex: number; f
 
 export interface FilePanelHandle {
   getContext(): PanelContext;
+  getDisplayPath(): string;
   selectAll(): void;
   navigate(location: string, volumeId?: string, home?: boolean): void;
+  navigatePath(path: string, baseLocation: string): void;
   openEntry(directory: string, rowId: string): void;
   parent(directory: string): void;
   focusList(): void;
@@ -49,6 +51,7 @@ export const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(function Fi
   const [directory, setDirectory] = useState<Directory>();
   const [selectedHome, setSelectedHome] = useState<HomeDirectory>();
   const [draft, setDraft] = useState("");
+  const [editingPath, setEditingPath] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [showHidden, setShowHidden] = useState(false);
@@ -60,6 +63,7 @@ export const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(function Fi
   const gridRoot = useRef<HTMLDivElement>(null);
   const current = useRef<string>();
   const modifiedClickCursor = useRef<{ rowId?: string; selectClicked: boolean }>();
+  const plainClickDeselect = useRef<{ rowId: string }>();
   const ctrlActivatesPanel = useRef(false);
   const doubleClickSelection = useRef<{ rowId: string; locations: string[] }>();
   const restore = useRef<View>();
@@ -78,6 +82,8 @@ export const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(function Fi
 
   useImperativeHandle(ref, () => ({
     navigate: (location, volumeId, home) => navigate({ path: "", location, volumeId, home }),
+    navigatePath: (path, baseLocation) => navigate({ path, location: "", baseLocation }),
+    getDisplayPath: () => snapshot.current?.displayPath ?? "",
     openEntry: (directory, rowId) => {
       if (snapshot.current?.location !== directory) return;
       const location = entryDestination(snapshot.current, rowId);
@@ -168,11 +174,13 @@ export const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(function Fi
       },
     });
     loader.current = reader;
-    reader.request({ path: "", location: "" });
+    reader.request({ path: "", location: "", baseLocation: "" });
     return () => { reader.dispose(); loader.current = undefined; };
   }, []);
 
-  function navigate(request: PanelNavigationRequest) { loader.current?.request(request); }
+  function navigate(request: Omit<PanelNavigationRequest, "baseLocation"> & { baseLocation?: string }) {
+    loader.current?.request({ ...request, baseLocation: request.baseLocation ?? "" });
+  }
   function refresh() { navigate({ path: "", location: snapshot.current?.location ?? "" }); }
   function parent() {
     if (hasParent(snapshot.current)) dispatch("panel.goToParent");
@@ -190,19 +198,28 @@ export const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(function Fi
     }}
       sx={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column",
         border: "2px solid", borderColor: active ? "primary.main" : "divider", bgcolor: "background.paper" }}>
-      <Typography title={directory?.displayPath} sx={{ px: 1, py: 0.5, fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-        {label}: {directory?.displayPath ?? (loading ? "Загрузка каталога…" : "Каталог не открыт")}
-      </Typography>
       <VolumeBar label={label} directory={directory} selectedHome={selectedHome} choose={(location, volumeId, home) => {
         dispatch("panel.goToLocation", home ? { location, home: true } : volumeId === undefined ? { location } : { location, volumeId });
       }} />
-      <Box component="form" sx={{ display: "flex", gap: 0.5, px: 1 }} onSubmit={event => {
-        event.preventDefault();
-        if (draft !== "") navigate({ path: draft, location: "" });
-      }}>
-        <TextField size="small" fullWidth value={draft} placeholder="Абсолютный путь…"
-          slotProps={{ htmlInput: { "aria-label": `Путь: ${label}` } }} onChange={event => setDraft(event.target.value)} />
-        <Button type="submit" size="small" disabled={draft === ""}>Перейти</Button>
+      <Box sx={{ px: 1, minHeight: 32, display: "flex", alignItems: "center", minWidth: 0 }}>
+        {editingPath ? <TextField size="small" variant="standard" fullWidth autoFocus value={draft}
+          slotProps={{ htmlInput: { "aria-label": `Путь: ${label}`, spellCheck: false } }}
+          onChange={event => setDraft(event.target.value)} onBlur={() => setEditingPath(false)} onKeyDown={event => {
+            if (event.key === "Escape") {
+              event.preventDefault(); event.stopPropagation(); setEditingPath(false);
+            } else if (event.key === "Enter") {
+              event.preventDefault(); event.stopPropagation();
+              if (draft !== "") dispatch("panel.goToPath", { path: draft });
+              setEditingPath(false);
+            }
+          }} /> : <ButtonBase aria-label={`Изменить путь: ${label}`} title={directory?.displayPath}
+          disabled={!directory} onClick={() => { setDraft(directory?.displayPath ?? ""); setEditingPath(true); }}
+          sx={{ width: "100%", minWidth: 0, justifyContent: "flex-start", px: 0.5, py: 0.25, borderRadius: 0.5 }}>
+          <Typography component="span" sx={{ fontFamily: "monospace", fontSize: 13, fontWeight: 600,
+            overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {directory?.displayPath ?? (loading ? "Загрузка каталога…" : "Каталог не открыт")}
+          </Typography>
+        </ButtonBase>}
       </Box>
       <Box sx={{ display: "flex", alignItems: "center", px: 0.5, gap: 0.5 }}>
         <Button size="small" onClick={parent} disabled={!hasParent(directory)}>↑ Вверх</Button>
@@ -224,6 +241,7 @@ export const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(function Fi
           const rowId = row?.getAttribute("row-id");
           if (event.button === 0 && event.detail === 1) {
             doubleClickSelection.current = undefined;
+            plainClickDeselect.current = undefined;
           }
           if (event.button === 0 && event.detail === 1 && !event.ctrlKey && !event.metaKey && !event.shiftKey && rowId) {
             // A native double-click contains two ordinary clicks, and AG Grid
@@ -233,6 +251,10 @@ export const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(function Fi
               rowId,
               locations: api.current?.getSelectedNodes().flatMap(node => fileLocation(node.data) ? [node.data!.id] : []) ?? [],
             };
+            const selected = api.current?.getSelectedNodes() ?? [];
+            if (rowId === current.current && selected.length === 1 && selected[0].data?.id === rowId) {
+              plainClickDeselect.current = { rowId };
+            }
           }
           if (event.button === 0 && (event.ctrlKey || event.metaKey || event.shiftKey) &&
             event.target instanceof Element && event.target.closest(".ag-cell")) {
@@ -288,6 +310,13 @@ export const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(function Fi
             onContextChange();
           }}
           onCellClicked={event => {
+            const plain = plainClickDeselect.current;
+            plainClickDeselect.current = undefined;
+            if (plain?.rowId === event.data?.id) {
+              queueMicrotask(() => {
+                if (!event.api.isDestroyed()) event.node.setSelected(false, false, "api");
+              });
+            }
             const preserved = modifiedClickCursor.current;
             if (!preserved) return;
             queueMicrotask(() => {

@@ -157,7 +157,7 @@ test("Home uses ordinary directory navigation, without a fictional volume lookup
   const calls = [];
   const reader = createPanelReader(async request => { calls.push(request); return { location: request.location }; }, () => assert.fail("Home is not a volume"));
   assert.deepEqual(await reader({ path: "", location: "home", home: true }), { location: "home" });
-  assert.deepEqual(calls, [{ path: "", location: "home" }]);
+  assert.deepEqual(calls, [{ path: "", location: "home", baseLocation: "" }]);
 });
 
 const directory = (location, ancestorLocations = [], displayPath = location) => ({

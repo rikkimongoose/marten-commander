@@ -23,7 +23,7 @@ export function createPanelReader(
   lookup: (request: DirectoryRequest) => Call<Volume>,
 ): (request: PanelNavigationRequest) => Call<Directory> {
   return request => {
-    const address = { path: request.path, location: request.location };
+    const address = { path: request.path, location: request.location, baseLocation: request.baseLocation ?? "" };
     if (request.volumeId === undefined) return read(address);
     let cancelled = false;
     const check = lookup(address);

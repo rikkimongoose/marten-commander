@@ -37,12 +37,18 @@ export interface Directory {
 
 /**
  * DirectoryRequest accepts either a typed native path or an opaque location.
+ * A relative typed path may carry an opaque base location from its panel.
  * An empty request opens the initial directory. Location is an address, not an
  * access-control token; this desktop application can browse the user's files.
  */
 export interface DirectoryRequest {
     "path": string;
     "location": string;
+
+    /**
+     * Optional opaque base for a relative typed path.
+     */
+    "baseLocation": string;
 }
 
 export interface Entry {

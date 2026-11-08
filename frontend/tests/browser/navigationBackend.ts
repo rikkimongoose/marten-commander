@@ -9,13 +9,25 @@ const state = { reads: [] as string[], opens: [] as any[], openError: "", hold: 
   release: undefined as (() => void) | undefined, emptyRoot: initialRoot };
 Object.assign(window, { navigationTest: state });
 
-export async function ReadDirectory(request: { path: string; location: string }) {
-  const path = request.location || request.path || (initialRoot ? "/" : home);
+function resolve(path: string, base: string) {
+  if (path === "~" || path === "~/") return home;
+  if (path.startsWith("~/")) path = `${home}/${path.slice(2)}`;
+  const source = path.startsWith("/") ? path : `${base}/${path}`;
+  const parts: string[] = [];
+  for (const part of source.split("/")) {
+    if (part === "" || part === ".") continue;
+    if (part === "..") parts.pop(); else parts.push(part);
+  }
+  return `/${parts.join("/")}`;
+}
+
+export async function ReadDirectory(request: { path: string; location: string; baseLocation?: string }) {
+  const path = request.location || (request.path ? resolve(request.path, request.baseLocation || "/") : "") || (initialRoot ? "/" : home);
   state.reads.push(path);
   if (state.hold === path) await new Promise<void>(resolve => { state.release = resolve; });
   if (path === `${home}/denied`) throw new Error(`Нет прав на чтение каталога ${path}`);
   const parent = path === "/" ? "/" : path.slice(0, path.lastIndexOf("/")) || "/";
-  const entries = path === home ? [entry(`${home}/child`, true), entry(`${home}/denied`, true),
+  const entries = path === home ? [entry(`${home}/child`, true), entry(`${home}/denied`, true), entry(`${home}/My Projects`, true),
     entry(`${home}/one.txt`), entry(`${home}/two.txt`), entry(`${home}/three.txt`)]
     : path === "/home" ? [entry(home, true)]
     : path === "/" && !state.emptyRoot ? [entry("/home", true)]

@@ -20,3 +20,38 @@ export function registerLocationCommand(
     },
   });
 }
+
+export function registerPathCommand(
+  dispatcher: CommandDispatcher,
+  navigate: (panel: PanelId, path: string, baseLocation: string) => void,
+) {
+  dispatcher.register("panel.goToPath", {
+    available: context => context[context.activePanel].directoryLocation
+      ? { enabled: true } : { enabled: false, reason: "Каталог ещё не открыт." },
+    execute: request => {
+      if (typeof request.params.path !== "string" || request.params.path === "") {
+        throw new CommandError("invalid_params", "Не указан путь для перехода.");
+      }
+      const base = request.context[request.context.activePanel].directoryLocation;
+      if (!base) throw new CommandError("unavailable", "Каталог ещё не открыт.");
+      navigate(request.context.activePanel, request.params.path, base);
+    },
+  });
+}
+
+export function registerHomeCommand(
+  dispatcher: CommandDispatcher,
+  getHome: () => PromiseLike<{ location: string }>,
+  navigate: (panel: PanelId, location: string) => void,
+) {
+  dispatcher.register("panel.goHome", {
+    available: () => ({ enabled: true }),
+    execute: async request => {
+      const home = await getHome();
+      if (!home || typeof home.location !== "string" || home.location === "") {
+        throw new CommandError("unavailable", "Домашний каталог недоступен.");
+      }
+      navigate(request.context.activePanel, home.location);
+    },
+  });
+}

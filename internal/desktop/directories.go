@@ -18,11 +18,13 @@ import (
 )
 
 // DirectoryRequest accepts either a typed native path or an opaque location.
+// A relative typed path may carry an opaque base location from its panel.
 // An empty request opens the initial directory. Location is an address, not an
 // access-control token; this desktop application can browse the user's files.
 type DirectoryRequest struct {
-	Path     string `json:"path"`
-	Location string `json:"location"`
+	Path         string `json:"path"`
+	Location     string `json:"location"`
+	BaseLocation string `json:"baseLocation"` // Optional opaque base for a relative typed path.
 }
 
 type Entry struct {
@@ -58,6 +60,25 @@ func NewDirectoryService(directories *app.DirectoryService, initialIsHome bool) 
 // Wails injects the call context; cancelling its generated promise cancels reads.
 func (s *DirectoryService) ReadDirectory(ctx context.Context, request DirectoryRequest) (Directory, error) {
 	path := request.Path
+	if path != "" {
+		var err error
+		path, err = expandHomePath(path)
+		if err != nil {
+			return Directory{}, err
+		}
+	}
+	if request.BaseLocation != "" {
+		if request.Location != "" || path == "" {
+			return Directory{}, fmt.Errorf("базовый каталог допустим только для введённого пути")
+		}
+		base, err := base64.RawURLEncoding.DecodeString(request.BaseLocation)
+		if err != nil || len(base) == 0 {
+			return Directory{}, fmt.Errorf("некорректный идентификатор базового каталога")
+		}
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(string(base), path)
+		}
+	}
 	if request.Location != "" {
 		if path != "" {
 			return Directory{}, fmt.Errorf("укажите путь или идентификатор каталога, но не оба")
