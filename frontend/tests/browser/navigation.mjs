@@ -8,7 +8,7 @@ import react from "@vitejs/plugin-react";
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || "playwright-core");
 const server = await createServer({
   configFile: false, root: fileURLToPath(new URL("../../", import.meta.url)), plugins: [react()],
-  resolve: { alias: [{ find: /.*bindings\/.*\/desktop\/(commandservice|directoryservice|volumeservice)(\.[jt]s)?$/,
+  resolve: { alias: [{ find: /.*bindings\/.*\/desktop\/(commandservice|directoryservice|operationservice|volumeservice)(\.[jt]s)?$/,
     replacement: fileURLToPath(new URL("navigationBackend.ts", import.meta.url)) }] },
   server: { host: "127.0.0.1", port: 0 },
 });
@@ -63,6 +63,13 @@ try {
     "disabled shortcut does not dispatch a command");
   assert.equal(await page.getByRole("alert").count(), 0, "disabled shortcut reports no fake result or error");
   await path("left", home); await path("right", home);
+  const operationsButton = page.getByRole("button", { name: "Операции" });
+  await operationsButton.click();
+  const operationsDialog = page.getByRole("dialog", { name: "Файловые операции" });
+  await operationsDialog.getByText("Операций пока нет.").waitFor();
+  await cell("left", "..").click(); await focused("left", "..");
+  await operationsDialog.getByRole("button", { name: "Закрыть операции" }).click();
+  await operationsDialog.waitFor({ state: "hidden" });
   const mkdirButton = functionBar.getByRole("button", { name: /F7.*Каталог/ });
   assert.equal(await mkdirButton.isDisabled(), false, "F7 becomes available after the source directory loads");
   assert.equal(await panel("left").getByText(/^Левая панель:/).count(), 0);

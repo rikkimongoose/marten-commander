@@ -45,6 +45,8 @@ export async function GetVolumeInfo() {
     space: { total: "1000", free: "400", available: "400", used: "600" } };
 }
 export async function ListVolumes() { return [await GetVolumeInfo()]; }
+export async function ListOperations() { return []; }
+export async function CancelOperation() { throw new Error("Test operation not found"); }
 export async function ExecuteCommand(request: any) {
   state.opens.push(request);
   if (request.type === "file.mkdir") {

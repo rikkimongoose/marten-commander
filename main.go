@@ -8,12 +8,17 @@ import (
 	"github.com/rikkimongoose/marten-commander/internal/app"
 	"github.com/rikkimongoose/marten-commander/internal/desktop"
 	"github.com/rikkimongoose/marten-commander/internal/localfs"
+	"github.com/rikkimongoose/marten-commander/internal/operations"
 	"github.com/rikkimongoose/marten-commander/internal/volumes"
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
 //go:embed all:frontend/dist
 var assets embed.FS
+
+func init() {
+	application.RegisterEvent[operations.Event]("operations:updated")
+}
 
 func main() {
 	initial, err := os.UserHomeDir()
@@ -27,16 +32,24 @@ func main() {
 	filesystem := localfs.LocalFileSystem{}
 	directories := app.NewDirectoryService(filesystem, filesystem, initial)
 	files := app.NewFileService(filesystem, localfs.SystemFileLauncher{})
+	operationManager := operations.NewManager()
+	operationService := desktop.NewOperationService(operationManager)
 	desktopApp := application.New(application.Options{
 		Name: "Marten Commander", Description: "Двухпанельный файловый менеджер",
 		Services: []application.Service{
 			application.NewService(desktop.NewDirectoryService(directories, initialIsHome)),
 			application.NewService(desktop.NewCommandService(files)),
 			application.NewService(desktop.NewVolumeService(volumes.NewService())),
+			application.NewService(operationService),
 		},
 		Assets: application.AssetOptions{Handler: application.AssetFileServerFS(assets)},
 		Mac:    application.MacOptions{ApplicationShouldTerminateAfterLastWindowClosed: true},
 	})
+	if err := operationManager.SetPublisher(func(event operations.Event) {
+		desktopApp.Event.Emit(desktop.OperationUpdatedEvent, event)
+	}); err != nil {
+		log.Fatal(err)
+	}
 	desktopApp.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title: "Marten Commander", Width: 1200, Height: 720, URL: "/",
 	})

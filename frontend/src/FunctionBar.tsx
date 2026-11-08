@@ -12,7 +12,7 @@ interface FunctionBarProps {
 function keyboardIsBlocked(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) return false;
   return isTextInput(target) || !!target.closest(".ag-cell-editing, [role='dialog'], [aria-modal='true']") ||
-    !!document.querySelector(".ag-cell-editing, [role='dialog'], [aria-modal='true']");
+    !!document.querySelector(".ag-cell-editing, [role='dialog']:not([data-nonmodal-operation-dialog]), [aria-modal='true']");
 }
 
 export function FunctionBar({ availability, dispatch }: FunctionBarProps) {

@@ -13,6 +13,7 @@ import { CommandLine } from "./CommandLine";
 import { GetHomeDirectory } from "../bindings/github.com/rikkimongoose/marten-commander/internal/desktop/volumeservice";
 import { MkdirDialog } from "./MkdirDialog";
 import type { MkdirPromptResult } from "./fileCommands";
+import { OperationsCenter } from "./OperationsCenter";
 
 type MkdirDialogState = { open: boolean; destination: string; busy: boolean; error: string };
 
@@ -121,7 +122,12 @@ export default function App() {
           <FilePanel ref={right} label="Правая панель" active={active === "right"} activate={() => activate("right")}
             onContextChange={commandContextChanged} dispatch={dispatch} />
         </Box>
-        <CommandLine path={activePath} dispatch={dispatch} report={setCommandError} returnToPanel={focusActivePanel} />
+        <Box sx={{ display: "flex", alignItems: "stretch", gap: 1, minWidth: 0 }}>
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <CommandLine path={activePath} dispatch={dispatch} report={setCommandError} returnToPanel={focusActivePanel} />
+          </Box>
+          <OperationsCenter />
+        </Box>
         <FunctionBar availability={id => commands.availability(id)} dispatch={dispatch} />
         <MkdirDialog {...mkdirDialog} submit={submitMkdir} cancel={cancelMkdir} closed={focusActivePanel} />
       </Box>
