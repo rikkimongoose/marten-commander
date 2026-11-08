@@ -1,59 +1,131 @@
-# Welcome to Your New Wails3 Project!
+# Marten Commander
 
-Congratulations on generating your Wails3 application! This README will guide you through the next steps to get your project up and running.
+Двухпанельный файловый менеджер на Go, Wails 3, React, MUI и AG Grid.
+Текущая версия MVP — 0.1.0: чтение локальных каталогов, независимые файловые
+панели, навигация и открытие файлов системным приложением.
 
-## Getting Started
+## Возможности текущего этапа
 
-1. Navigate to your project directory in the terminal.
+- Обе панели начинают с домашнего каталога и независимо переходят по файловой системе.
+- Над каждой панелью — выбор локального тома и отдельный быстрый переход Home,
+  свободное место и индикатор заполненности. Linux использует реальные mounts,
+  Windows — диски с буквами; список обновляется при открытии селектора.
+  Home доступен, не дожидаясь медленного устройства. Ручное обновление каталога
+  также обновляет сведения о свободном месте.
+- Переход по абсолютному пути, двойному щелчку или Enter; строка `..` и Backspace —
+  к родителю. При возврате курсор устанавливается на покинутый каталог, если он виден.
+- Enter и двойной щелчок по обычному файлу открывают его в назначенном приложении ОС.
+- Tab/Shift+Tab из файлового списка переключают панели и переводят фокус в список;
+  стрелки перемещают курсор независимо от явного выделения.
+- Имена, расширения, типы, размеры и время изменения; сортировка кликом по заголовку.
+- Каталоги и доступные ссылки на каталоги всегда впереди, включая обратную сортировку.
+- Независимый переключатель скрытых файлов и красное множественное выделение
+  Ctrl/Cmd/Shift произвольных строк, отдельное от синей строки текущего элемента.
+- Ручное обновление кнопкой или Ctrl/Cmd+R в таблице, сохранение доступных выбранных
+  записей, текущего элемента и верхней строки при обновлении того же каталога.
+- «Выделить всё» кнопкой или Ctrl/Cmd+A в таблице через общий CommandDispatcher;
+  неизменяемый контекст обеих панелей и минимальный Wails-контракт команд.
+- Защита от устаревших ответов; ошибка оставляет последний успешный снимок.
 
-2. To run your application in development mode, use the following command:
+Наблюдение за каталогами, копирование, удаление, перемещение, встроенные редактор
+и просмотрщик, «Открыть с помощью» и сохранение настроек ещё не реализованы. Изменения файловой
+системы появляются после ручного обновления.
 
-   ```
-   wails3 dev
-   ```
+## Linux release candidate 0.1.0
 
-   This will start your application and enable hot-reloading for both frontend and backend changes.
+Workflow [`.github/workflows/linux-build.yml`](.github/workflows/linux-build.yml)
+на `ubuntu-24.04` запускает Go- и frontend-тесты, TypeScript typecheck, production
+frontend build и штатную задачу `wails3 build GOOS=linux GOARCH=amd64`. После
+успешной проверки он публикует Actions Artifact
+`marten-commander-v0.1.0-linux-amd64` с tar.gz и отдельной SHA-256 суммой.
 
-3. To build your application for production, use:
+Артефакт скачивается со страницы конкретного запуска во вкладке **Actions**. GitHub
+помещает tar.gz и checksum во внешнюю ZIP-обёртку. Это временный CI-артефакт, а не
+GitHub Release; workflow не создаёт тег или Release.
 
-   ```
-   wails3 build
-   ```
+В Ubuntu runtime-зависимости устанавливаются отдельно:
 
-   This will create a production-ready executable in the `build` directory.
+```sh
+sudo apt update
+sudo apt install libgtk-4-1 libwebkitgtk-6.0-4
+```
 
-## Exploring Wails3 Features
+Подробные команды проверки, распаковки и запуска, а также ручной smoke checklist:
+[docs/linux-release.md](docs/linux-release.md). Состав версии и ограничения:
+[RELEASE_NOTES.md](RELEASE_NOTES.md).
 
-Now that you have your project set up, it's time to explore the features that Wails3 offers:
+## Разработка и сборка
 
-1. **Check out the examples**: The best way to learn is by example. Visit the `examples` directory in the `v3/examples` directory to see various sample applications.
+CI использует Go 1.27, Wails CLI 3.0.0, Node.js 24 и npm.
+Версии frontend-зависимостей закреплены в `frontend/package-lock.json`.
+Linux-сборке нужны C-компилятор, pkg-config, GTK4 и WebKitGTK 6.0 с development-файлами.
+Для запуска GUI нужна графическая сессия.
 
-2. **Run an example**: To run any of the examples, navigate to the example's directory and use:
+```sh
+cd frontend
+npm ci
+cd ..
+wails3 dev
+```
 
-   ```
-   go run .
-   ```
+Стандартная сборка через существующий Taskfile:
 
-   Note: Some examples may be under development during the alpha phase.
+```sh
+wails3 build GOOS=linux GOARCH=amd64
+```
 
-3. **Explore the documentation**: Visit the [Wails3 documentation](https://v3.wails.io/) for in-depth guides and API references.
+Результат Linux-сборки — `bin/marten-commander`. Для явной проверки без задач,
+обновляющих зависимости и иконки, можно использовать:
 
-4. **Join the community**: Have questions or want to share your progress? Join the [Wails Discord](https://discord.gg/JDdSxwjhGf) or visit the [Wails discussions on GitHub](https://github.com/wailsapp/wails/discussions).
+```sh
+wails3 generate bindings -ts -i
+cd frontend
+npm run build
+cd ..
+go build -mod=readonly -tags production -buildvcs=false -o bin/marten-commander .
+```
 
-## Project Structure
+Bindings генерируются автоматически; вручную их редактировать не нужно.
 
-Take a moment to familiarize yourself with your project structure:
+## Тесты
 
-- `frontend/`: Contains your frontend code (HTML, CSS, JavaScript/TypeScript)
-- `main.go`: The entry point of your Go backend
-- `app.go`: Define your application structure and methods here
-- `wails.json`: Configuration file for your Wails project
+```sh
+go test -race -cover ./internal/...
+go vet ./internal/...
+cd frontend
+npm test
+npm run build
+```
 
-## Next Steps
+Go-тесты внутренних пакетов работают независимо от Wails и GUI. Frontend-тесты
+используют встроенный Node.js test runner. Проверки в браузере не заменяют
+проверку клавиатуры и фокуса в нативном webview.
 
-1. Modify the frontend in the `frontend/` directory to create your desired UI.
-2. Add backend functionality in `main.go`.
-3. Use `wails3 dev` to see your changes in real-time.
-4. When ready, build your application with `wails3 build`.
+Дополнительный браузерный тест использует настоящий App/AG Grid и подставные
+ответы Wails. Нужны отдельно установленный `playwright-core` и Chrome; зависимости
+приложения для него не изменяются. Из `frontend`:
 
-Happy coding with Wails3! If you encounter any issues or have questions, don't hesitate to consult the documentation or reach out to the Wails community.
+```sh
+PLAYWRIGHT_MODULE=/absolute/path/to/playwright-core/index.mjs \
+CHROME_PATH=/absolute/path/to/chrome node tests/browser/navigation.mjs
+```
+
+Тест проверяет переходы, открытие файлов через Enter/двойной щелчок, ошибку
+системного обработчика, Tab, стрелки, красное Ctrl/Shift-выделение, его независимость
+от курсора, сброс выделения при переходе,
+возврат курсора, пустой корень, отказ в доступе и отсутствие перехвата фокуса
+неактивной панелью при позднем ответе.
+
+## Ограничения
+
+Переход по ссылке открывает её физический путь. Необычные имена отображаются
+с экранированием; переходы по записям используют отдельные обратимые идентификаторы.
+В поле пути вводится обычный абсолютный путь ОС, без escape-последовательностей.
+Невалидный UTF-8 нельзя набрать в текстовом поле, но такие каталоги доступны
+через родительскую панель на Linux. При скрытии строки её выделение снимается.
+Системное открытие в этом этапе разрешено только для обычных файлов; ссылки и
+специальные объекты не передаются внешним приложениям. Linux использует `xdg-open`,
+Windows — `ShellExecute`.
+Отмена не может гарантированно прервать заблокированный системный вызов.
+
+Подробные решения, контракты и ограничения: [docs/architecture.md](docs/architecture.md).

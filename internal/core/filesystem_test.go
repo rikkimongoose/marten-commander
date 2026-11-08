@@ -4,7 +4,7 @@ import (
 	"io/fs"
 	"testing"
 
-	"changeme/internal/core"
+	"github.com/rikkimongoose/marten-commander/internal/core"
 )
 
 func TestKindFromMode(t *testing.T) {
