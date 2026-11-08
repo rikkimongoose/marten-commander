@@ -40,12 +40,12 @@ export function MkdirDialog({ open, destination, busy, error, submit, cancel, cl
     }}>
     <DialogTitle>Создать каталог</DialogTitle>
     <DialogContent sx={{ minWidth: { xs: 280, sm: 440 } }}>
-      {(error || validation) && <Alert severity="error" sx={{ mb: 1 }}>{error || validation}</Alert>}
-      <TextField inputRef={input} fullWidth label="Имя нового каталога" value={name} disabled={busy}
-        error={!!validation} onChange={event => { setName(event.target.value); setValidation(""); }} />
       <Typography variant="body2" color="text.secondary" sx={{ mb: 1, overflowWrap: "anywhere" }}>
         Каталог назначения: {destination}
       </Typography>
+      {(error || validation) && <Alert severity="error" sx={{ mb: 1 }}>{error || validation}</Alert>}
+      <TextField inputRef={input} fullWidth label="Имя нового каталога" value={name} disabled={busy}
+        error={!!validation} onChange={event => { setName(event.target.value); setValidation(""); }} />
     </DialogContent>
     <DialogActions>
       <Button onClick={cancel} disabled={busy}>Отмена</Button>
