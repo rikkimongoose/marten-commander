@@ -38,6 +38,9 @@ try {
       region.querySelectorAll(".ag-row.cursor-row").length === 1;
   }, { side, id });
   const count = async (side, n) => panel(side).getByText(new RegExp(`выделено ${n}(?:$| ·)`)).waitFor();
+  const gridScrollState = side => panel(side).locator(".ag-root").evaluate(root => [...root.querySelectorAll("*")]
+    .filter(element => element.scrollHeight > element.clientHeight || element.scrollWidth > element.clientWidth)
+    .map(element => ({ className: element.className, top: element.scrollTop, left: element.scrollLeft })));
   const functionBar = page.getByRole("navigation", { name: "Функциональные команды" });
   const commandForm = page.getByRole("form", { name: "Командная строка" });
   const functionButtons = functionBar.getByRole("button");
@@ -72,6 +75,7 @@ try {
   }), false, "function shortcuts do not capture command-line input");
   await commandInput.press("Tab");
   assert.equal(await panel("left").getAttribute("data-active"), "true", "Tab in command line does not switch panels");
+  await focused("left", "..");
 
   // Compact path header edits the panel path; Escape cancels and Enter uses
   // the same guarded panel loader.
@@ -150,6 +154,12 @@ try {
   await focused("left", `${home}/one.txt`);
   assert.deepEqual(await panel("left").locator(".ag-row.ag-row-selected").evaluateAll(rows => rows.map(row => row.getAttribute("row-id")).sort()),
     [`${home}/one.txt`, `${home}/three.txt`, `${home}/two.txt`], "Shift selects the complete range without moving the cursor");
+  const scrollBeforeCommandTab = await gridScrollState("left");
+  await commandInput.focus(); await commandInput.press("Tab");
+  await focused("left", `${home}/one.txt`); await count("left", 3);
+  assert.equal(await panel("left").getAttribute("data-active"), "true", "command-line Tab keeps the active panel");
+  assert.deepEqual(await gridScrollState("left"), scrollBeforeCommandTab,
+    "command-line Tab preserves the file-list scroll position");
   await page.keyboard.press("ArrowUp"); await focused("left", `${home}/My Projects`); await count("left", 3);
   await page.keyboard.press("ArrowDown"); await focused("left", `${home}/one.txt`); await count("left", 3);
   const reads = await page.evaluate(() => window.navigationTest.reads.length);

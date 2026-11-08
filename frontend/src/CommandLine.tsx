@@ -7,9 +7,10 @@ interface CommandLineProps {
   path: string;
   dispatch: (id: CommandId, params?: JsonObject) => void;
   report: (message: string) => void;
+  returnToPanel: () => void;
 }
 
-export function CommandLine({ path, dispatch, report }: CommandLineProps) {
+export function CommandLine({ path, dispatch, report, returnToPanel }: CommandLineProps) {
   const [value, setValue] = useState("");
   const [history, setHistory] = useState<readonly string[]>([]);
   const [historyIndex, setHistoryIndex] = useState<number>();
@@ -31,6 +32,11 @@ export function CommandLine({ path, dispatch, report }: CommandLineProps) {
   }
 
   function historyKey(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key === "Tab" && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey) {
+      event.preventDefault();
+      returnToPanel();
+      return;
+    }
     if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || (event.key !== "ArrowUp" && event.key !== "ArrowDown")) return;
     event.preventDefault();
     if (history.length === 0) return;

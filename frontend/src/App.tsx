@@ -66,6 +66,9 @@ export default function App() {
     setCommandError("");
     void commands.dispatch(id, params).catch(error => setCommandError(commandErrorMessage(error)));
   }
+  function focusActivePanel() {
+    (activeRef.current === "left" ? left.current : right.current)?.focusList();
+  }
   const activePath = (active === "left" ? left.current : right.current)?.getDisplayPath() ?? "";
   return (
     <AgGridProvider modules={[AllCommunityModule]}>
@@ -78,7 +81,7 @@ export default function App() {
           <FilePanel ref={right} label="Правая панель" active={active === "right"} activate={() => activate("right")}
             onContextChange={commandContextChanged} dispatch={dispatch} />
         </Box>
-        <CommandLine path={activePath} dispatch={dispatch} report={setCommandError} />
+        <CommandLine path={activePath} dispatch={dispatch} report={setCommandError} returnToPanel={focusActivePanel} />
         <FunctionBar availability={id => commands.availability(id)} dispatch={dispatch} />
       </Box>
     </AgGridProvider>
