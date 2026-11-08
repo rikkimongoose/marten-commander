@@ -1,7 +1,8 @@
 # Marten Commander
 
 Двухпанельный файловый менеджер на Go, Wails 3, React, MUI и AG Grid.
-Реализованы шаги 1–3 MVP: чтение локальных каталогов и независимые файловые панели.
+Текущая версия MVP — 0.1.0: чтение локальных каталогов, независимые файловые
+панели, навигация и открытие файлов системным приложением.
 
 ## Возможности текущего этапа
 
@@ -30,9 +31,32 @@
 и просмотрщик, «Открыть с помощью» и сохранение настроек ещё не реализованы. Изменения файловой
 системы появляются после ручного обновления.
 
+## Linux release candidate 0.1.0
+
+Workflow [`.github/workflows/linux-build.yml`](.github/workflows/linux-build.yml)
+на `ubuntu-24.04` запускает Go- и frontend-тесты, TypeScript typecheck, production
+frontend build и штатную задачу `wails3 build GOOS=linux GOARCH=amd64`. После
+успешной проверки он публикует Actions Artifact
+`marten-commander-v0.1.0-linux-amd64` с tar.gz и отдельной SHA-256 суммой.
+
+Артефакт скачивается со страницы конкретного запуска во вкладке **Actions**. GitHub
+помещает tar.gz и checksum во внешнюю ZIP-обёртку. Это временный CI-артефакт, а не
+GitHub Release; workflow не создаёт тег или Release.
+
+В Ubuntu runtime-зависимости устанавливаются отдельно:
+
+```sh
+sudo apt update
+sudo apt install libgtk-4-1 libwebkitgtk-6.0-4
+```
+
+Подробные команды проверки, распаковки и запуска, а также ручной smoke checklist:
+[docs/linux-release.md](docs/linux-release.md). Состав версии и ограничения:
+[RELEASE_NOTES.md](RELEASE_NOTES.md).
+
 ## Разработка и сборка
 
-Используются Go 1.26 или новее, Wails CLI 3.0.0, Node.js 22.18 или новее и npm.
+CI использует Go 1.27, Wails CLI 3.0.0, Node.js 24 и npm.
 Версии frontend-зависимостей закреплены в `frontend/package-lock.json`.
 Linux-сборке нужны C-компилятор, pkg-config, GTK4 и WebKitGTK 6.0 с development-файлами.
 Для запуска GUI нужна графическая сессия.
@@ -47,7 +71,7 @@ wails3 dev
 Стандартная сборка через существующий Taskfile:
 
 ```sh
-wails3 build
+wails3 build GOOS=linux GOARCH=amd64
 ```
 
 Результат Linux-сборки — `bin/marten-commander`. Для явной проверки без задач,

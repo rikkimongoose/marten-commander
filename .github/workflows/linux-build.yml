@@ -1,0 +1,144 @@
+name: Linux build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: 1.27.x
+  NODE_VERSION: 24
+  WAILS_VERSION: v3.0.0
+  BINARY_PATH: bin/marten-commander
+  ARCHIVE_STEM: marten-commander-v0.1.0-linux-amd64
+  ARCHIVE_NAME: marten-commander-v0.1.0-linux-amd64.tar.gz
+
+jobs:
+  build:
+    name: Test and build Linux amd64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            build-essential \
+            file \
+            libgtk-4-dev \
+            libwebkitgtk-6.0-dev \
+            pkg-config
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Wails CLI
+        run: go install github.com/wailsapp/wails/v3/cmd/wails3@${WAILS_VERSION}
+
+      - name: Print tool versions
+        run: |
+          go version
+          node --version
+          npm --version
+          wails3 version
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Run frontend tests
+        working-directory: frontend
+        run: npm test
+
+      - name: Typecheck and build production frontend
+        working-directory: frontend
+        run: npm run build
+
+      # main.go embeds frontend/dist, so the complete Go test run follows the
+      # production frontend build instead of relying on an untracked dist tree.
+      - name: Run Go tests
+        run: go test ./...
+
+      - name: Reject a development-server reference
+        run: |
+          if grep --recursive --line-number --fixed-strings "localhost:9245" frontend/dist; then
+            echo "::error::Production frontend contains a Vite development-server URL"
+            exit 1
+          fi
+
+      - name: Build Wails production binary
+        run: wails3 build GOOS=linux GOARCH=amd64
+
+      - name: Verify dependency manifests are unchanged
+        run: git diff --exit-code -- go.mod go.sum frontend/package.json frontend/package-lock.json
+
+      - name: Verify binary and print diagnostics
+        run: |
+          if [ ! -x "${BINARY_PATH}" ]; then
+            echo "::error file=${BINARY_PATH}::Wails build did not create an executable binary"
+            find bin -maxdepth 2 -type f -print 2>/dev/null || true
+            exit 1
+          fi
+
+          binary_type="$(file "${BINARY_PATH}")"
+          echo "${binary_type}"
+          if ! grep --quiet "ELF 64-bit.*x86-64" <<<"${binary_type}"; then
+            echo "::error file=${BINARY_PATH}::Expected a Linux amd64 ELF executable"
+            exit 1
+          fi
+
+          echo "Dynamic dependencies:"
+          ldd_output="$(ldd "${BINARY_PATH}")"
+          echo "${ldd_output}"
+          if grep --quiet "not found" <<<"${ldd_output}"; then
+            echo "::error file=${BINARY_PATH}::The binary has an unresolved dynamic dependency"
+            exit 1
+          fi
+          echo "Binary size:"
+          stat --format='%n: %s bytes' "${BINARY_PATH}"
+          du --human-readable "${BINARY_PATH}"
+
+      - name: Create release-candidate archive
+        run: |
+          package_root="${RUNNER_TEMP}/${ARCHIVE_STEM}"
+          mkdir --parents dist "${package_root}"
+          install --mode=0755 "${BINARY_PATH}" "${package_root}/marten-commander"
+          install --mode=0644 docs/linux-release.md "${package_root}/README.md"
+          install --mode=0644 RELEASE_NOTES.md "${package_root}/RELEASE_NOTES.md"
+          tar --directory="${RUNNER_TEMP}" --create --gzip \
+            --file="dist/${ARCHIVE_NAME}" "${ARCHIVE_STEM}"
+          (cd dist && sha256sum "${ARCHIVE_NAME}" > "${ARCHIVE_NAME}.sha256")
+          echo "Archive size:"
+          stat --format='%n: %s bytes' "dist/${ARCHIVE_NAME}"
+          echo "SHA-256:"
+          cat "dist/${ARCHIVE_NAME}.sha256"
+
+      - name: Upload Linux release candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARCHIVE_STEM }}
+          path: |
+            dist/${{ env.ARCHIVE_NAME }}
+            dist/${{ env.ARCHIVE_NAME }}.sha256
+          if-no-files-found: error
+          retention-days: 21

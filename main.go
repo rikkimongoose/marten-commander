@@ -28,7 +28,7 @@ func main() {
 	directories := app.NewDirectoryService(filesystem, filesystem, initial)
 	files := app.NewFileService(filesystem, localfs.SystemFileLauncher{})
 	desktopApp := application.New(application.Options{
-		Name: "marten-commander", Description: "Двухпанельный файловый менеджер",
+		Name: "Marten Commander", Description: "Двухпанельный файловый менеджер",
 		Services: []application.Service{
 			application.NewService(desktop.NewDirectoryService(directories, initialIsHome)),
 			application.NewService(desktop.NewCommandService(files)),
