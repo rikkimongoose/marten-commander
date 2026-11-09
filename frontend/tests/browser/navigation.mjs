@@ -312,6 +312,25 @@ try {
   await page.waitForFunction(home => document.querySelector('form[aria-label="Командная строка"] p')?.textContent === `${home} >`, home);
   assert.equal(await panel("right").locator(`.ag-row[row-id="${home}/one.txt"]`).getAttribute("aria-selected"), "true");
 
+  // F5 and its button share file.copy and preserve the panel snapshot while
+  // collecting an editable local destination.
+  const copyButton = functionBar.getByRole("button", { name: /F5.*Копировать/ });
+  assert.equal(await copyButton.isDisabled(), false, "F5 is available for the selected source");
+  const defaultCopyDestination = await pathButton("left").getAttribute("title");
+  await page.keyboard.press("F5");
+  const copyDialog = page.getByRole("dialog", { name: "Копировать" });
+  await copyDialog.getByText("Источники: 1").waitFor();
+  await copyDialog.getByText("one.txt", { exact: true }).waitFor();
+  const copyDestination = copyDialog.getByRole("textbox", { name: "Каталог назначения" });
+  assert.equal(await copyDestination.inputValue(), defaultCopyDestination);
+  await copyDestination.fill("/tmp/Копия с пробелами");
+  await copyDestination.press("Enter");
+  await copyDialog.waitFor({ state: "hidden" });
+  const copyRequest = await page.evaluate(() => window.navigationTest.opens.filter(request => request.type === "file.copy").at(-1));
+  assert.equal(copyRequest.context.activePanel, "right");
+  assert.deepEqual(copyRequest.context.right.selectedLocations, [`${home}/one.txt`]);
+  assert.equal(copyRequest.params.destination, "/tmp/Копия с пробелами");
+
   // F7 and its button share file.mkdir. The modal owns text keys, keeps the
   // captured destination, reports backend errors in place and refreshes only
   // the source panel with the created directory under the cursor.
@@ -357,7 +376,7 @@ try {
   await cell("right", `${home}/Создан кнопкой`).waitFor(); await focused("right", `${home}/Создан кнопкой`);
   assert.deepEqual(await page.evaluate(() => window.navigationTest.mkdirs.at(-1)), { parent: home, name: "Создан кнопкой" });
   assert.deepEqual(errors, []);
-  console.log("PASS: AG Grid navigation, selection, focus, errors and F7 mkdir dialog");
+  console.log("PASS: AG Grid navigation, selection, focus, F5 copy and F7 mkdir dialogs");
 } finally {
   await browser?.close();
   await server.close();

@@ -3,7 +3,7 @@ import { Alert, Box, CssBaseline } from "@mui/material";
 import { AgGridProvider } from "ag-grid-react";
 import { AllCommunityModule } from "ag-grid-community";
 import { FilePanel, type FilePanelHandle } from "./FilePanel";
-import { CANCEL_COMMAND, CommandDispatcher, CommandError, commandErrorMessage, sourceAndTarget,
+import { CANCEL_COMMAND, CommandDispatcher, CommandError, commandErrorMessage, effectiveSelection, sourceAndTarget,
   type CommandContext, type CommandId, type JsonObject, type PanelId } from "./commands";
 import { registerHomeCommand, registerLocationCommand, registerPathCommand } from "./locationCommand";
 import { registerNavigationCommands } from "./navigationCommands";
@@ -12,10 +12,13 @@ import { FunctionBar } from "./FunctionBar";
 import { CommandLine } from "./CommandLine";
 import { GetHomeDirectory } from "../bindings/github.com/rikkimongoose/marten-commander/internal/desktop/volumeservice";
 import { MkdirDialog } from "./MkdirDialog";
-import type { MkdirPromptResult } from "./fileCommands";
+import type { CopyPromptResult, MkdirPromptResult } from "./fileCommands";
 import { OperationsCenter } from "./OperationsCenter";
+import { CopyDialog } from "./CopyDialog";
+import type { Operation } from "../bindings/github.com/rikkimongoose/marten-commander/internal/operations/models";
 
 type MkdirDialogState = { open: boolean; destination: string; busy: boolean; error: string };
+type CopyDialogState = { open: boolean; sources: string[]; destination: string; busy: boolean; error: string };
 
 export default function App() {
   const [active, setActive] = useState<PanelId>("left");
@@ -25,6 +28,8 @@ export default function App() {
   const [commandError, setCommandError] = useState("");
   const [mkdirDialog, setMkdirDialog] = useState<MkdirDialogState>({ open: false, destination: "", busy: false, error: "" });
   const mkdirResolve = useRef<((result: MkdirPromptResult) => void)>();
+  const [copyDialog, setCopyDialog] = useState<CopyDialogState>({ open: false, sources: [], destination: "", busy: false, error: "" });
+  const copyResolve = useRef<((result: CopyPromptResult) => void)>();
   const [, setCommandContextVersion] = useState(0);
   const commandContextChanged = useCallback(() => setCommandContextVersion(version => version + 1), []);
   const [commands] = useState(() => {
@@ -66,6 +71,8 @@ export default function App() {
         const directory = sourceAndTarget(request.context).source.directoryLocation;
         if (directory) panel(request.context.activePanel).refreshCreated(directory, name);
       },
+    }, {
+      prompt: { open: openCopyDialog, retry: retryCopyDialog, complete: closeCopyDialog },
     });
     return dispatcher;
   });
@@ -110,6 +117,45 @@ export default function App() {
     setMkdirDialog(value => ({ ...value, open: false, error: "" }));
     resolve?.(CANCEL_COMMAND);
   }
+  function openCopyDialog(context: CommandContext): Promise<CopyPromptResult> {
+    const { source } = sourceAndTarget(context);
+    const sourceHandle = context.activePanel === "left" ? left.current : right.current;
+    const targetHandle = context.activePanel === "left" ? right.current : left.current;
+    const locations = effectiveSelection(source);
+    setCopyDialog({ open: true, sources: sourceHandle?.describeLocations(locations) ?? [...locations],
+      destination: targetHandle?.getDisplayPath() ?? "", busy: false, error: "" });
+    return new Promise(resolve => { copyResolve.current = resolve; });
+  }
+  function retryCopyDialog(message: string): Promise<CopyPromptResult> {
+    setCopyDialog(value => ({ ...value, busy: false, error: message }));
+    return new Promise(resolve => { copyResolve.current = resolve; });
+  }
+  function closeCopyDialog() {
+    copyResolve.current = undefined;
+    setCopyDialog(value => ({ ...value, open: false, busy: false, error: "" }));
+  }
+  function submitCopy(destination: string) {
+    const resolve = copyResolve.current;
+    if (!resolve || copyDialog.busy) return;
+    copyResolve.current = undefined;
+    setCopyDialog(value => ({ ...value, destination, busy: true, error: "" }));
+    resolve({ destination });
+  }
+  function cancelCopy() {
+    const resolve = copyResolve.current;
+    if (copyDialog.busy) return;
+    copyResolve.current = undefined;
+    setCopyDialog(value => ({ ...value, open: false, error: "" }));
+    resolve?.(CANCEL_COMMAND);
+  }
+  function refreshCopyDestination(operation: Operation) {
+    if (operation.type !== "file.copy" || !operation.context.destinationDirectory) return;
+    // Refresh any panel that still displays the fixed destination. Navigation
+    // performed after launch is never undone, and an edited destination may
+    // currently be visible in either panel.
+    left.current?.refreshDirectory(operation.context.destinationDirectory);
+    right.current?.refreshDirectory(operation.context.destinationDirectory);
+  }
   const activePath = (active === "left" ? left.current : right.current)?.getDisplayPath() ?? "";
   return (
     <AgGridProvider modules={[AllCommunityModule]}>
@@ -126,10 +172,12 @@ export default function App() {
           <Box sx={{ flex: 1, minWidth: 0 }}>
             <CommandLine path={activePath} dispatch={dispatch} report={setCommandError} returnToPanel={focusActivePanel} />
           </Box>
-          <OperationsCenter />
+          <OperationsCenter onOperationFinished={refreshCopyDestination} />
         </Box>
         <FunctionBar availability={id => commands.availability(id)} dispatch={dispatch} />
         <MkdirDialog {...mkdirDialog} submit={submitMkdir} cancel={cancelMkdir} closed={focusActivePanel} />
+        <CopyDialog open={copyDialog.open} sources={copyDialog.sources} initialDestination={copyDialog.destination}
+          busy={copyDialog.busy} error={copyDialog.error} submit={submitCopy} cancel={cancelCopy} closed={focusActivePanel} />
       </Box>
     </AgGridProvider>
   );

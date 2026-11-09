@@ -93,3 +93,46 @@ test("cancelling mkdir preparation performs no backend operation", async () => {
   assert.equal(await dispatcher.dispatch("file.mkdir"), "cancelled");
   assert.equal(backendCalls, 0);
 });
+
+test("file.copy freezes explicit selection and destination while panels change", async () => {
+  const context = {
+    activePanel: "left",
+    left: { directoryLocation: location("/left"), selectedLocations: [location("/left/one"), location("/left/two")],
+      focusedLocation: location("/left/cursor") },
+    right: { directoryLocation: location("/right"), selectedLocations: [], focusedLocation: null },
+  };
+  const answer = Promise.withResolvers();
+  const calls = [], completed = [];
+  const dispatcher = new CommandDispatcher(() => context, () => "copy-1");
+  registerFileCommands(dispatcher, request => calls.push(request), undefined, {
+    prompt: { open: snapshot => { assert.equal(snapshot.activePanel, "left"); return answer.promise; },
+      retry: () => assert.fail("no retry"), complete: () => completed.push(true) },
+  });
+  const pending = dispatcher.dispatch("file.copy");
+  context.activePanel = "right";
+  context.left.selectedLocations = [location("/left/changed")];
+  answer.resolve({ destination: "/edited target/Каталог" });
+  assert.equal(await pending, "executed");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].context.activePanel, "left");
+  assert.deepEqual(calls[0].context.left.selectedLocations, [location("/left/one"), location("/left/two")]);
+  assert.deepEqual(calls[0].params, { destination: "/edited target/Каталог" });
+  assert.equal(completed.length, 1);
+});
+
+test("file.copy falls back to cursor and cancellation has no side effects", async () => {
+  const context = { activePanel: "left",
+    left: { directoryLocation: location("/left"), selectedLocations: [], focusedLocation: location("/left/cursor") },
+    right: { directoryLocation: location("/right"), selectedLocations: [], focusedLocation: null } };
+  let backendCalls = 0;
+  const dispatcher = new CommandDispatcher(() => context);
+  registerFileCommands(dispatcher, () => { backendCalls++; }, undefined, {
+    prompt: { open: snapshot => { assert.equal(snapshot.left.focusedLocation, location("/left/cursor")); return CANCEL_COMMAND; },
+      retry: () => assert.fail("no retry"), complete: () => assert.fail("no completion") },
+  });
+  assert.equal(dispatcher.availability("file.copy").enabled, true);
+  assert.equal(await dispatcher.dispatch("file.copy"), "cancelled");
+  assert.equal(backendCalls, 0);
+  context.left.focusedLocation = null;
+  assert.equal(dispatcher.availability("file.copy").enabled, false);
+});

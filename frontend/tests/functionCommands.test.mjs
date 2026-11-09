@@ -30,6 +30,17 @@ test("F7 button and keyboard paths invoke the same available mkdir command", () 
   assert.deepEqual(calls, ["file.mkdir", "file.mkdir"]);
 });
 
+test("F5 button and keyboard paths invoke the same copy command", () => {
+  const calls = [];
+  const availability = () => ({ enabled: true });
+  const dispatch = id => calls.push(id);
+  invokeFunctionCommand("file.copy", availability, dispatch);
+  const shortcut = functionCommandForKey(key("F5"), false);
+  assert.equal(shortcut, "file.copy");
+  invokeFunctionCommand(shortcut, availability, dispatch);
+  assert.deepEqual(calls, ["file.copy", "file.copy"]);
+});
+
 test("missing and context-disabled handlers cannot be invoked and availability reacts to context", async () => {
   let focusedLocation = null;
   let calls = 0;

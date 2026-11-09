@@ -43,6 +43,8 @@ export interface FilePanelHandle {
   parent(directory: string): void;
   focusList(): void;
   refreshCreated(directoryLocation: string, name: string): void;
+  refreshDirectory(directoryLocation: string): void;
+  describeLocations(locations: readonly string[]): string[];
 }
 
 type FilePanelProps = { label: string; active: boolean; activate: () => void; onContextChange: () => void;
@@ -104,6 +106,10 @@ export const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(function Fi
       created.current = { directoryLocation, name };
       navigate({ path: "", location: directoryLocation });
     },
+    refreshDirectory: directoryLocation => {
+      if (snapshot.current?.location === directoryLocation) navigate({ path: "", location: directoryLocation });
+    },
+    describeLocations: locations => locations.map(location => api.current?.getRowNode(location)?.data?.name ?? location),
     getContext: () => ({
       directoryLocation: snapshot.current?.location ?? null,
       selectedLocations: api.current?.getSelectedNodes().flatMap(node => fileLocation(node.data) ? [node.data!.id] : []) ?? [],

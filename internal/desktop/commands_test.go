@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+
+	"github.com/rikkimongoose/marten-commander/internal/operations"
 )
 
 func commandFixture(t *testing.T) CommandRequest {
@@ -27,6 +29,18 @@ type fileServiceStub struct {
 	createdParent string
 	createdName   string
 	err           error
+}
+
+type copyServiceStub struct {
+	snapshot    operations.ContextSnapshot
+	sources     []string
+	destination string
+	err         error
+}
+
+func (s *copyServiceStub) Start(_ context.Context, snapshot operations.ContextSnapshot, sources []string, destination string) (operations.Operation, error) {
+	s.snapshot, s.sources, s.destination = snapshot, append([]string(nil), sources...), destination
+	return operations.Operation{ID: "copy-operation", State: operations.Running}, s.err
 }
 
 func (s *fileServiceStub) Open(_ context.Context, path string) error {
@@ -159,6 +173,76 @@ func TestMkdirCommandValidatesAndClassifiesErrors(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCopyCommandUsesEffectiveSelectionAndEditedDestination(t *testing.T) {
+	request := commandFixture(t)
+	request.Type = "file.copy"
+	destination := filepath.Join(t.TempDir(), "назначение с пробелами")
+	request.Params = json.RawMessage(`{"destination":` + string(mustJSON(t, destination)) + `}`)
+	copies := &copyServiceStub{}
+	if err := NewCommandService(&fileServiceStub{}, copies).ExecuteCommand(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	selected, _ := decodeLocation(request.Context.Left.SelectedLocations[0])
+	if !reflect.DeepEqual(copies.sources, []string{selected}) || copies.destination != destination {
+		t.Fatalf("copy start: sources=%q destination=%q", copies.sources, copies.destination)
+	}
+	if copies.snapshot.ActivePanel != "left" || len(copies.snapshot.Sources) != 1 ||
+		copies.snapshot.DestinationDirectory == nil || *copies.snapshot.DestinationDirectory != encode(destination) {
+		t.Fatalf("snapshot: %#v", copies.snapshot)
+	}
+	request.Context.Left.SelectedLocations = []string{}
+	focused, _ := decodeLocation(*request.Context.Left.FocusedLocation)
+	if err := NewCommandService(&fileServiceStub{}, copies).ExecuteCommand(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(copies.sources, []string{focused}) {
+		t.Fatalf("cursor fallback: %q", copies.sources)
+	}
+}
+
+func TestCopyCommandRejectsInvalidContextAndDestination(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		edit func(*CommandRequest)
+		code string
+	}{
+		{"relative destination", func(r *CommandRequest) { r.Params = json.RawMessage(`{"destination":"relative"}`) }, "invalid_params"},
+		{"no source", func(r *CommandRequest) {
+			r.Context.Left.SelectedLocations = []string{}
+			r.Context.Left.FocusedLocation = nil
+		}, "unavailable"},
+		{"source outside panel", func(r *CommandRequest) {
+			r.Context.Left.SelectedLocations = []string{encode(filepath.Join(t.TempDir(), "outside"))}
+		}, "invalid_context"},
+		{"backend unavailable", func(*CommandRequest) {}, "unavailable"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := commandFixture(t)
+			request.Type = "file.copy"
+			request.Params = json.RawMessage(`{"destination":"/tmp"}`)
+			test.edit(&request)
+			service := NewCommandService(&fileServiceStub{})
+			if test.name != "backend unavailable" {
+				service = NewCommandService(&fileServiceStub{}, &copyServiceStub{})
+			}
+			err := service.ExecuteCommand(context.Background(), request)
+			var commandErr *CommandError
+			if !errors.As(err, &commandErr) || commandErr.Code != test.code {
+				t.Fatalf("wanted %s, got %v", test.code, err)
+			}
+		})
+	}
+}
+
+func mustJSON(t *testing.T, value string) []byte {
+	t.Helper()
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
 }
 
 func TestCommandValidationAndUnsupportedTypes(t *testing.T) {

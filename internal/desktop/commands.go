@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/rikkimongoose/marten-commander/internal/operations"
 )
 
 // PanelContext uses the same reversible native-path encoding as Directory and
@@ -66,14 +68,23 @@ type fileCommandService interface {
 	CreateDirectory(context.Context, string, string) error
 }
 
+type copyCommandService interface {
+	Start(context.Context, operations.ContextSnapshot, []string, string) (operations.Operation, error)
+}
+
 // CommandService is the Wails transport boundary. It decodes opaque native
 // locations and delegates supported use cases to the application layer.
 type CommandService struct {
-	files fileCommandService
+	files  fileCommandService
+	copies copyCommandService
 }
 
-func NewCommandService(files fileCommandService) *CommandService {
-	return &CommandService{files: files}
+func NewCommandService(files fileCommandService, copies ...copyCommandService) *CommandService {
+	service := &CommandService{files: files}
+	if len(copies) > 0 {
+		service.copies = copies[0]
+	}
+	return service
 }
 
 func (s *CommandService) ExecuteCommand(ctx context.Context, request CommandRequest) error {
@@ -149,6 +160,58 @@ func (s *CommandService) ExecuteCommand(ctx context.Context, request CommandRequ
 				return &CommandError{"unavailable", "Эта файловая система не поддерживает создание каталогов."}
 			default:
 				return &CommandError{"mkdir_failed", fmt.Sprintf("Не удалось создать каталог %q: %v", name, err)}
+			}
+		}
+		return nil
+	}
+	if request.Type == "file.copy" {
+		if len(params) != 1 {
+			return &CommandError{"invalid_params", "Команда копирования требует только каталог назначения."}
+		}
+		var destination string
+		if raw, ok := params["destination"]; !ok || json.Unmarshal(raw, &destination) != nil ||
+			!filepath.IsAbs(destination) || strings.ContainsRune(destination, 0) {
+			return &CommandError{"invalid_params", "Укажите абсолютный локальный каталог назначения."}
+		}
+		sourcePanel, _ := request.Context.sourceAndTarget()
+		if sourcePanel.DirectoryLocation == nil {
+			return &CommandError{"unavailable", "Исходный каталог ещё не открыт."}
+		}
+		sourceDirectory, ok := decodeLocation(*sourcePanel.DirectoryLocation)
+		if !ok {
+			return &CommandError{"invalid_context", "Некорректный адрес исходного каталога."}
+		}
+		locations := sourcePanel.effectiveSelection()
+		sources := make([]string, 0, len(locations))
+		for _, location := range locations {
+			path, valid := decodeLocation(location)
+			if !valid || filepath.Dir(path) != filepath.Clean(sourceDirectory) || filepath.Base(path) == "." || filepath.Base(path) == ".." {
+				return &CommandError{"invalid_context", "Источник копирования не принадлежит открытому каталогу."}
+			}
+			sources = append(sources, path)
+		}
+		if len(sources) == 0 {
+			return &CommandError{"unavailable", "Не выбран файл или каталог для копирования."}
+		}
+		if s.copies == nil {
+			return &CommandError{"unavailable", "Копирование файлов недоступно."}
+		}
+		snapshot, err := OperationContextSnapshot(request.Context, request.Params)
+		if err != nil {
+			return err
+		}
+		encodedDestination := encode(destination)
+		snapshot.DestinationDirectory = &encodedDestination
+		if _, err := s.copies.Start(ctx, snapshot, sources, destination); err != nil {
+			switch {
+			case errors.Is(err, fs.ErrInvalid):
+				return &CommandError{"invalid_params", err.Error()}
+			case errors.Is(err, fs.ErrNotExist):
+				return &CommandError{"copy_failed", "Каталог назначения больше не существует."}
+			case errors.Is(err, fs.ErrPermission):
+				return &CommandError{"copy_failed", fmt.Sprintf("Недостаточно прав для копирования в %q.", display(destination))}
+			default:
+				return &CommandError{"copy_failed", fmt.Sprintf("Не удалось начать копирование: %v", err)}
 			}
 		}
 		return nil

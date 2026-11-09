@@ -3,9 +3,15 @@ package core
 
 import (
 	"context"
+	"errors"
 	"io"
 	"io/fs"
 	"time"
+)
+
+var (
+	ErrDestinationChanged        = errors.New("destination changed after conflict resolution")
+	ErrTemporaryHoldsDestination = errors.New("temporary path contains the displaced destination and must be preserved")
 )
 
 // EntryKind describes the entry itself, without following symbolic links.
@@ -75,4 +81,43 @@ type PathResolver interface {
 // provider-native path component; implementations must not create parents.
 type DirectoryCreator interface {
 	CreateDirectory(ctx context.Context, parent, name string) error
+}
+
+// TemporaryFile is a fully private regular file in the destination directory.
+// Copy code closes it before publication; the implementation must keep Name
+// on the same filesystem as the final destination.
+type TemporaryFile interface {
+	io.WriteCloser
+	Sync() error
+	Chmod(fs.FileMode) error
+	Name() string
+}
+
+// FileFingerprint identifies the destination object that the user approved
+// replacing. Token includes change data for the check immediately before
+// publication; Identity remains stable across an atomic directory rename.
+type FileFingerprint struct {
+	Token    string
+	Identity string
+}
+
+// CopySource opens a previously classified regular file or directory without
+// following a final symlink. Platforms unable to guarantee this must fail
+// explicitly rather than silently dereference it.
+type CopySource interface {
+	OpenCopyFile(ctx context.Context, path string) (io.ReadCloser, error)
+	ReadCopyDirectory(ctx context.Context, path string) ([]FileEntry, error)
+}
+
+// CopyDestination is the narrow mutation capability needed by the copy use
+// case. PublishNew must never overwrite. PublishReplace must either replace
+// exactly expected or leave the current destination intact.
+type CopyDestination interface {
+	CreateTemporaryFile(ctx context.Context, directory string, mode fs.FileMode) (TemporaryFile, error)
+	CreateTemporarySymlink(ctx context.Context, directory, target string) (string, error)
+	CreateDirectoryPath(ctx context.Context, path string, mode fs.FileMode) error
+	Fingerprint(ctx context.Context, path string) (FileFingerprint, error)
+	PublishNew(ctx context.Context, temporary, destination string) error
+	PublishReplace(ctx context.Context, temporary, destination string, expected FileFingerprint) error
+	RemoveTemporary(ctx context.Context, path string) error
 }

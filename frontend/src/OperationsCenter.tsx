@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Box, Button, CircularProgress, Divider, IconButton, LinearProgress, Paper, Stack, Tooltip, Typography } from "@mui/material";
 import { Events } from "@wailsio/runtime";
 import { CancelOperation, ListOperations, ResolveConflict } from "../bindings/github.com/rikkimongoose/marten-commander/internal/desktop/operationservice";
@@ -28,7 +28,7 @@ const api: OperationAPI = {
   resolveConflict: resolution => ResolveConflict(resolution as ConflictResolution) as PromiseLike<Operation>,
 };
 
-export function OperationsCenter() {
+export function OperationsCenter({ onOperationFinished }: { onOperationFinished?: (operation: Operation) => void }) {
   const [open, setOpen] = useState(false);
   const [operations, setOperations] = useState<readonly OperationView[]>([]);
   const [loading, setLoading] = useState(true);
@@ -38,6 +38,7 @@ export function OperationsCenter() {
   const [dismissedConflicts, setDismissedConflicts] = useState<ReadonlySet<string>>(new Set());
   const [conflictBusy, setConflictBusy] = useState(false);
   const [conflictError, setConflictError] = useState("");
+  const notifiedFinished = useRef(new Map<string, number>());
 
   const refresh = useCallback(() => {
     setLoading(true);
@@ -59,6 +60,16 @@ export function OperationsCenter() {
       if (next) setConflictID(next.conflictId);
     }
   }, [operations, conflictID, dismissedConflicts]);
+
+  useEffect(() => {
+    if (!onOperationFinished) return;
+    for (const operation of operations) {
+      if (operation.state !== "completed" && operation.state !== "failed" && operation.state !== "cancelled") continue;
+      if ((notifiedFinished.current.get(operation.operationId) ?? 0) >= operation.updateVersion) continue;
+      notifiedFinished.current.set(operation.operationId, operation.updateVersion);
+      onOperationFinished(operation as Operation);
+    }
+  }, [operations, onOperationFinished]);
 
   function show() { setOpen(true); refresh(); }
 
