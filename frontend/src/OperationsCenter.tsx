@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
 import { Alert, Box, Button, CircularProgress, Divider, IconButton, LinearProgress, Paper, Stack, Tooltip, Typography } from "@mui/material";
 import { Events } from "@wailsio/runtime";
-import { CancelOperation, ListOperations } from "../bindings/github.com/rikkimongoose/marten-commander/internal/desktop/operationservice";
-import type { Operation } from "../bindings/github.com/rikkimongoose/marten-commander/internal/operations/models";
+import { CancelOperation, ListOperations, ResolveConflict } from "../bindings/github.com/rikkimongoose/marten-commander/internal/desktop/operationservice";
+import type { ConflictResolution, Operation } from "../bindings/github.com/rikkimongoose/marten-commander/internal/operations/models";
 import { OperationsUpdated } from "../bindings/events";
 import { connectOperationUpdates, type OperationAPI } from "./operationClient.ts";
 import { applyOperationEvent, formatBytes, mergeOperations, operationIsCancellable, operationProgress,
-  type OperationUpdateEvent, type OperationView } from "./operationState.ts";
+  pendingConflicts, type ConflictResolutionView, type OperationUpdateEvent, type OperationView } from "./operationState.ts";
+import { ConflictDialog } from "./ConflictDialog.tsx";
 
 const labels: Record<string, string> = {
   copy: "Копирование", move: "Перемещение", delete: "Удаление",
@@ -24,6 +25,7 @@ function errorMessage(error: unknown): string {
 const api: OperationAPI = {
   list: () => ListOperations() as PromiseLike<Operation[] | null>,
   cancel: id => CancelOperation(id) as PromiseLike<Operation>,
+  resolveConflict: resolution => ResolveConflict(resolution as ConflictResolution) as PromiseLike<Operation>,
 };
 
 export function OperationsCenter() {
@@ -32,6 +34,10 @@ export function OperationsCenter() {
   const [loading, setLoading] = useState(true);
   const [failure, setFailure] = useState("");
   const [cancelling, setCancelling] = useState<ReadonlySet<string>>(new Set());
+  const [conflictID, setConflictID] = useState<string>();
+  const [dismissedConflicts, setDismissedConflicts] = useState<ReadonlySet<string>>(new Set());
+  const [conflictBusy, setConflictBusy] = useState(false);
+  const [conflictError, setConflictError] = useState("");
 
   const refresh = useCallback(() => {
     setLoading(true);
@@ -45,6 +51,15 @@ export function OperationsCenter() {
     event => setOperations(current => applyOperationEvent(current, event)),
     error => { setFailure(errorMessage(error)); setLoading(false); }), []);
 
+  useEffect(() => {
+    const pending = pendingConflicts(operations);
+    if (conflictID && !pending.some(conflict => conflict.conflictId === conflictID)) setConflictID(undefined);
+    if (!conflictID) {
+      const next = pending.find(conflict => !dismissedConflicts.has(conflict.conflictId));
+      if (next) setConflictID(next.conflictId);
+    }
+  }, [operations, conflictID, dismissedConflicts]);
+
   function show() { setOpen(true); refresh(); }
 
   function cancel(id: string) {
@@ -54,6 +69,36 @@ export function OperationsCenter() {
       error => setFailure(errorMessage(error))).finally(() => setCancelling(current => {
         const next = new Set(current); next.delete(id); return next;
       }));
+  }
+
+  function openConflict(id: string) {
+    setDismissedConflicts(current => { const next = new Set(current); next.delete(id); return next; });
+    setConflictError("");
+    setConflictID(id);
+  }
+
+  function closeConflict() {
+    if (!conflictID || conflictBusy) return;
+    setDismissedConflicts(current => new Set(current).add(conflictID));
+    setConflictID(undefined);
+    setConflictError("");
+  }
+
+  function resolveConflict(action: string, applyToAll: boolean) {
+    const conflict = pendingConflicts(operations).find(value => value.conflictId === conflictID);
+    if (!conflict || conflictBusy) return;
+    const resolution: ConflictResolutionView = { operationId: conflict.operationId, conflictId: conflict.conflictId,
+      revision: conflict.revision, action, applyToAll, customTargetPath: "" };
+    setConflictBusy(true);
+    setConflictError("");
+    void Promise.resolve(api.resolveConflict(resolution)).then(operation => {
+      setOperations(current => mergeOperations(current, [operation]));
+      setDismissedConflicts(current => new Set(current).add(conflict.conflictId));
+      setConflictID(undefined);
+    }, error => {
+      setConflictError(errorMessage(error));
+      refresh();
+    }).finally(() => setConflictBusy(false));
   }
 
   const active = operations.filter(operation => operationIsCancellable(operation.state)).length;
@@ -89,6 +134,8 @@ export function OperationsCenter() {
             </Typography>
             <LinearProgress variant={progress.determinate ? "determinate" : "indeterminate"} value={progress.value} sx={{ my: 0.75 }} />
             {operation.error && <Alert severity="error" sx={{ my: 0.75 }}>{operation.error.message}</Alert>}
+            {operation.pendingConflict && <Button size="small" color="warning"
+              onClick={() => openConflict(operation.pendingConflict!.conflictId)}>Разрешить конфликт</Button>}
             {operationIsCancellable(operation.state) && <Button size="small" onClick={() => cancel(operation.operationId)} disabled={busy}>
               {busy ? "Отмена…" : "Отмена"}
             </Button>}
@@ -96,5 +143,7 @@ export function OperationsCenter() {
         })}
       </Stack>
     </Paper>}
+    <ConflictDialog conflict={pendingConflicts(operations).find(value => value.conflictId === conflictID) ?? null}
+      busy={conflictBusy} error={conflictError} resolve={resolveConflict} close={closeConflict} />
   </>;
 }

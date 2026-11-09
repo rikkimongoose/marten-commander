@@ -8,12 +8,39 @@ export interface OperationProgressView {
 
 export interface OperationErrorView { readonly code: string; readonly message: string }
 
+export interface ConflictMetadataView {
+  readonly path: string;
+  readonly kind: string;
+  readonly size: number | null;
+  readonly modifiedAt: string | null;
+}
+
+export interface ConflictRequestView {
+  readonly operationId: string;
+  readonly conflictId: string;
+  readonly type: string;
+  readonly source: ConflictMetadataView;
+  readonly destination: ConflictMetadataView;
+  readonly allowedActions: readonly string[] | null;
+  readonly revision: number;
+}
+
+export interface ConflictResolutionView {
+  readonly operationId: string;
+  readonly conflictId: string;
+  readonly revision: number;
+  readonly action: string;
+  readonly applyToAll: boolean;
+  readonly customTargetPath: string;
+}
+
 export interface OperationView {
   readonly operationId: string;
   readonly type: string;
   readonly state: string;
   readonly progress: OperationProgressView;
   readonly error: OperationErrorView | null;
+  readonly pendingConflict: ConflictRequestView | null;
   readonly updateVersion: number;
   readonly createdAt: string;
   readonly finishedAt: string | null;
@@ -43,6 +70,10 @@ export function applyOperationEvent(current: readonly OperationView[], event: Op
 
 export function operationIsCancellable(state: string): boolean {
   return state === "queued" || state === "running" || state === "waiting-for-user";
+}
+
+export function pendingConflicts(operations: readonly OperationView[]): readonly ConflictRequestView[] {
+  return operations.flatMap(operation => operation.pendingConflict ? [operation.pendingConflict] : []);
 }
 
 export function operationProgress(operation: OperationView): { determinate: boolean; value: number } {

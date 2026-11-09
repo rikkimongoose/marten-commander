@@ -8,7 +8,7 @@ const initialRoot = new URLSearchParams(window.location.search).has("emptyRoot")
 const state = { reads: [] as string[], opens: [] as any[], openError: "", hold: "",
   release: undefined as (() => void) | undefined, emptyRoot: initialRoot,
   mkdirs: [] as { parent: string; name: string }[], created: new Map<string, string[]>(), holdMkdir: false,
-  releaseMkdir: undefined as (() => void) | undefined };
+  releaseMkdir: undefined as (() => void) | undefined, operations: [] as any[], conflictResolutions: [] as any[] };
 Object.assign(window, { navigationTest: state });
 
 function resolve(path: string, base: string) {
@@ -45,8 +45,18 @@ export async function GetVolumeInfo() {
     space: { total: "1000", free: "400", available: "400", used: "600" } };
 }
 export async function ListVolumes() { return [await GetVolumeInfo()]; }
-export async function ListOperations() { return []; }
+export async function ListOperations() { return state.operations; }
 export async function CancelOperation() { throw new Error("Test operation not found"); }
+export async function ResolveConflict(resolution: any) {
+  state.conflictResolutions.push(resolution);
+  const operation = state.operations.find(value => value.operationId === resolution.operationId);
+  if (!operation || operation.pendingConflict?.conflictId !== resolution.conflictId ||
+    operation.pendingConflict.revision !== resolution.revision) throw new Error("Устаревший конфликт");
+  operation.state = resolution.action === "cancel-operation" ? "cancelled" : "running";
+  operation.pendingConflict = null;
+  operation.updateVersion++;
+  return operation;
+}
 export async function ExecuteCommand(request: any) {
   state.opens.push(request);
   if (request.type === "file.mkdir") {

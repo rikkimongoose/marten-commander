@@ -1,8 +1,9 @@
-import type { OperationUpdateEvent, OperationView } from "./operationState.ts";
+import type { ConflictResolutionView, OperationUpdateEvent, OperationView } from "./operationState.ts";
 
 export interface OperationAPI {
   list(): PromiseLike<readonly OperationView[] | null>;
   cancel(id: string): PromiseLike<OperationView>;
+  resolveConflict(resolution: ConflictResolutionView): PromiseLike<OperationView>;
 }
 
 export type OperationSubscription = (receive: (event: OperationUpdateEvent) => void) => () => void;

@@ -56,15 +56,16 @@ type OperationError struct {
 }
 
 type Operation struct {
-	ID            string          `json:"operationId"`
-	Type          string          `json:"type"`
-	Context       ContextSnapshot `json:"context"`
-	CreatedAt     time.Time       `json:"createdAt"`
-	FinishedAt    *time.Time      `json:"finishedAt"`
-	State         State           `json:"state"`
-	Progress      Progress        `json:"progress"`
-	Error         *OperationError `json:"error"`
-	UpdateVersion uint64          `json:"updateVersion"`
+	ID              string           `json:"operationId"`
+	Type            string           `json:"type"`
+	Context         ContextSnapshot  `json:"context"`
+	CreatedAt       time.Time        `json:"createdAt"`
+	FinishedAt      *time.Time       `json:"finishedAt"`
+	State           State            `json:"state"`
+	Progress        Progress         `json:"progress"`
+	Error           *OperationError  `json:"error"`
+	PendingConflict *ConflictRequest `json:"pendingConflict"`
+	UpdateVersion   uint64           `json:"updateVersion"`
 }
 
 type Event struct {
@@ -83,12 +84,14 @@ type RunnerFunc func(context.Context, Reporter) error
 
 func (f RunnerFunc) Run(ctx context.Context, reporter Reporter) error { return f(ctx, reporter) }
 
-// Reporter is the runner-facing extension point. WaitingForUser and Resume
-// model Issue #11's future pause without defining a conflict protocol here.
+// Reporter is the runner-facing extension point. RequestConflict owns the
+// typed pause/resume protocol; WaitingForUser and Resume remain available for
+// other future questions that do not use file-conflict semantics.
 type Reporter interface {
 	Report(Progress) error
 	WaitingForUser() error
 	Resume() error
+	RequestConflict(ConflictRequest) (ConflictDecision, error)
 }
 
 // RunError lets a runner return a stable machine-readable failure code.
@@ -113,6 +116,13 @@ func (e *RunError) Unwrap() error { return e.Cause }
 type record struct {
 	operation Operation
 	cancel    context.CancelFunc
+	pending   *pendingConflict
+	policies  map[ConflictType]ConflictResolution
+}
+
+type pendingConflict struct {
+	request  ConflictRequest
+	response chan ConflictResolution
 }
 
 type Manager struct {
@@ -265,6 +275,81 @@ func (m *Manager) Cancel(id string) (Operation, error) {
 	return copy, nil
 }
 
+// ResolveConflict validates the complete request identity. Stale, duplicate,
+// or cross-operation responses are rejected without changing either operation.
+func (m *Manager) ResolveConflict(resolution ConflictResolution) (Operation, error) {
+	m.mu.Lock()
+	rec, ok := m.operations[resolution.OperationID]
+	if !ok {
+		m.mu.Unlock()
+		return Operation{}, &ConflictError{"operation_not_found", "Операция для ответа на конфликт не найдена."}
+	}
+	pending := rec.pending
+	if pending == nil || rec.operation.State != WaitingForUser {
+		m.mu.Unlock()
+		return Operation{}, &ConflictError{"conflict_not_pending", "Операция больше не ожидает решения этого конфликта."}
+	}
+	if resolution.ConflictID != pending.request.ConflictID {
+		m.mu.Unlock()
+		return Operation{}, &ConflictError{"conflict_mismatch", "Ответ относится к другому или устаревшему конфликту."}
+	}
+	if resolution.Revision != pending.request.Revision {
+		m.mu.Unlock()
+		return Operation{}, &ConflictError{"conflict_revision_mismatch", "Состояние конфликта изменилось; обновите данные операции."}
+	}
+	if !actionAllowed(pending.request.AllowedActions, resolution.Action) {
+		m.mu.Unlock()
+		return Operation{}, &ConflictError{"conflict_action_not_allowed", "Выбранное действие недоступно для этого типа конфликта."}
+	}
+	if resolution.Action == CancelOperation {
+		resolution.ApplyToAll = false
+	}
+	if resolution.ApplyToAll {
+		if rec.policies == nil {
+			rec.policies = make(map[ConflictType]ConflictResolution)
+		}
+		policy := resolution
+		policy.OperationID, policy.ConflictID, policy.Revision = "", "", 0
+		// A generated target is specific to one destination. Future runners may
+		// return one for KeepBoth, but it must never be replayed by a policy.
+		policy.CustomTargetPath = ""
+		rec.policies[pending.request.Type] = policy
+	}
+	rec.pending = nil
+	rec.operation.PendingConflict = nil
+	cancel := rec.cancel
+	if resolution.Action == CancelOperation {
+		if err := m.transitionLocked(rec, Cancelled); err != nil {
+			m.mu.Unlock()
+			return Operation{}, err
+		}
+	} else if err := m.transitionLocked(rec, Running); err != nil {
+		m.mu.Unlock()
+		return Operation{}, err
+	}
+	copy := cloneOperation(rec.operation)
+	response := pending.response
+	m.mu.Unlock()
+	response <- resolution
+	if resolution.Action == CancelOperation && cancel != nil {
+		cancel()
+	}
+	m.enqueue(copy)
+	return copy, nil
+}
+
+func (m *Manager) PendingConflicts() []ConflictRequest {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	result := make([]ConflictRequest, 0)
+	for i := len(m.order) - 1; i >= 0; i-- {
+		if pending := m.operations[m.order[i]].operation.PendingConflict; pending != nil {
+			result = append(result, cloneConflictRequest(*pending))
+		}
+	}
+	return result
+}
+
 func (m *Manager) Close() {
 	m.closeOnce.Do(func() {
 		m.mu.Lock()
@@ -293,7 +378,7 @@ func (m *Manager) Close() {
 
 func (m *Manager) run(ctx context.Context, id string, runner Runner) {
 	defer m.runs.Done()
-	err := runner.Run(ctx, reporter{manager: m, id: id})
+	err := runner.Run(ctx, reporter{manager: m, id: id, ctx: ctx})
 	m.mu.Lock()
 	rec, ok := m.operations[id]
 	if !ok || terminal(rec.operation.State) {
@@ -327,6 +412,7 @@ func (m *Manager) run(ctx context.Context, id string, runner Runner) {
 type reporter struct {
 	manager *Manager
 	id      string
+	ctx     context.Context
 }
 
 func (r reporter) Report(progress Progress) error {
@@ -358,6 +444,49 @@ func (r reporter) Report(progress Progress) error {
 func (r reporter) WaitingForUser() error { return r.transition(WaitingForUser) }
 func (r reporter) Resume() error         { return r.transition(Running) }
 
+func (r reporter) RequestConflict(request ConflictRequest) (ConflictDecision, error) {
+	if err := validateConflictRequest(request); err != nil {
+		return ConflictDecision{}, err
+	}
+	conflictID, err := newID()
+	if err != nil {
+		return ConflictDecision{}, fmt.Errorf("create conflict id: %w", err)
+	}
+	r.manager.mu.Lock()
+	rec, ok := r.manager.operations[r.id]
+	if !ok {
+		r.manager.mu.Unlock()
+		return ConflictDecision{}, ErrNotFound
+	}
+	if rec.operation.State != Running || rec.pending != nil {
+		state := rec.operation.State
+		r.manager.mu.Unlock()
+		return ConflictDecision{}, fmt.Errorf("%w: cannot request conflict while %s", ErrInvalidTransition, state)
+	}
+	request.OperationID = r.id
+	request.ConflictID = conflictID
+	request.AllowedActions = AllowedConflictActions(request.Type)
+	if policy, exists := rec.policies[request.Type]; exists && actionAllowed(request.AllowedActions, policy.Action) {
+		policy.OperationID, policy.ConflictID = r.id, conflictID
+		policy.Revision = rec.operation.UpdateVersion
+		r.manager.mu.Unlock()
+		return conflictDecision(policy), nil
+	}
+	if err := r.manager.transitionLocked(rec, WaitingForUser); err != nil {
+		r.manager.mu.Unlock()
+		return ConflictDecision{}, err
+	}
+	request.Revision = rec.operation.UpdateVersion
+	response := make(chan ConflictResolution, 1)
+	rec.pending = &pendingConflict{request: cloneConflictRequest(request), response: response}
+	conflict := cloneConflictRequest(request)
+	rec.operation.PendingConflict = &conflict
+	copy := cloneOperation(rec.operation)
+	r.manager.mu.Unlock()
+	r.manager.enqueue(copy)
+	return waitForConflict(r.ctx, r.manager, r.id, response)
+}
+
 func (r reporter) transition(next State) error {
 	r.manager.mu.Lock()
 	rec, ok := r.manager.operations[r.id]
@@ -388,6 +517,9 @@ func (m *Manager) transitionLocked(rec *record, next State) error {
 	if terminal(next) {
 		now := time.Now().UTC()
 		rec.operation.FinishedAt = &now
+		rec.operation.PendingConflict = nil
+		rec.pending = nil
+		rec.policies = nil
 	}
 	return nil
 }
@@ -505,6 +637,10 @@ func cloneOperation(value Operation) Operation {
 	if value.Error != nil {
 		copy := *value.Error
 		value.Error = &copy
+	}
+	if value.PendingConflict != nil {
+		copy := cloneConflictRequest(*value.PendingConflict)
+		value.PendingConflict = &copy
 	}
 	return value
 }

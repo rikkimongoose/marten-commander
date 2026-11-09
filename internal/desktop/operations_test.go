@@ -75,7 +75,11 @@ func (s *operationManagerStub) Cancel(string) (operations.Operation, error) {
 	s.operation.State = operations.Cancelled
 	return s.operation, nil
 }
-func (s *operationManagerStub) Close() { s.closed = true }
+func (s *operationManagerStub) ResolveConflict(operations.ConflictResolution) (operations.Operation, error) {
+	return s.operation, nil
+}
+func (s *operationManagerStub) PendingConflicts() []operations.ConflictRequest { return nil }
+func (s *operationManagerStub) Close()                                         { s.closed = true }
 
 func TestOperationServiceListsGetsCancelsAndShutsDown(t *testing.T) {
 	manager := &operationManagerStub{operation: operations.Operation{ID: "one", State: operations.Running}}
@@ -141,5 +145,56 @@ func TestOperationServiceReadsCurrentManagerState(t *testing.T) {
 	after, err := service.GetOperation(context.Background(), created.ID)
 	if err != nil || after.State != operations.Cancelled || after.UpdateVersion <= got.UpdateVersion {
 		t.Fatalf("GetOperation did not expose cancellation: %#v, %v", after, err)
+	}
+}
+
+func TestOperationServiceRestoresAndResolvesPendingConflict(t *testing.T) {
+	manager := operations.NewManager()
+	defer manager.Close()
+	service := NewOperationService(manager)
+	created, err := manager.Create("copy", operations.ContextSnapshot{ActivePanel: "left"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision := make(chan operations.ConflictDecision, 1)
+	_, err = manager.Start(created.ID, operations.RunnerFunc(func(ctx context.Context, reporter operations.Reporter) error {
+		result, err := reporter.RequestConflict(operations.ConflictRequest{Type: operations.FileFile,
+			Source:      operations.ConflictMetadata{Path: "/source.txt", Kind: operations.File},
+			Destination: operations.ConflictMetadata{Path: "/destination.txt", Kind: operations.File}})
+		if err != nil {
+			return err
+		}
+		decision <- result
+		return nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pending []operations.ConflictRequest
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		pending, err = service.ListPendingConflicts(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(pending) == 1 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if len(pending) != 1 || pending[0].OperationID != created.ID {
+		t.Fatalf("pending API: %#v", pending)
+	}
+	snapshot, err := service.GetOperation(context.Background(), created.ID)
+	if err != nil || snapshot.PendingConflict == nil || snapshot.PendingConflict.ConflictID != pending[0].ConflictID {
+		t.Fatalf("operation snapshot: %#v, %v", snapshot, err)
+	}
+	resolved, err := service.ResolveConflict(context.Background(), operations.ConflictResolution{
+		OperationID: created.ID, ConflictID: pending[0].ConflictID, Revision: pending[0].Revision, Action: operations.Skip})
+	if err != nil || resolved.State != operations.Running || resolved.PendingConflict != nil {
+		t.Fatalf("resolve API: %#v, %v", resolved, err)
+	}
+	if result := <-decision; result.Resolution.Action != operations.Skip {
+		t.Fatalf("runner decision: %#v", result)
 	}
 }

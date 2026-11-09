@@ -14,6 +14,8 @@ type operationManager interface {
 	Get(string) (operations.Operation, error)
 	List() []operations.Operation
 	Cancel(string) (operations.Operation, error)
+	ResolveConflict(operations.ConflictResolution) (operations.Operation, error)
+	PendingConflicts() []operations.ConflictRequest
 	Close()
 }
 
@@ -55,6 +57,28 @@ func (s *OperationService) CancelOperation(ctx context.Context, id string) (oper
 		return operations.Operation{}, &CommandError{"invalid_request", "Операция не найдена."}
 	}
 	return operation, err
+}
+
+func (s *OperationService) ResolveConflict(ctx context.Context, resolution operations.ConflictResolution) (operations.Operation, error) {
+	if err := ctx.Err(); err != nil {
+		return operations.Operation{}, err
+	}
+	operation, err := s.manager.ResolveConflict(resolution)
+	if err == nil {
+		return operation, nil
+	}
+	var conflictError *operations.ConflictError
+	if errors.As(err, &conflictError) {
+		return operations.Operation{}, &CommandError{conflictError.Code, conflictError.Message}
+	}
+	return operations.Operation{}, err
+}
+
+func (s *OperationService) ListPendingConflicts(ctx context.Context) ([]operations.ConflictRequest, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return s.manager.PendingConflicts(), nil
 }
 
 func (s *OperationService) ServiceShutdown() error {

@@ -5,7 +5,7 @@ import { applyOperationEvent, formatBytes, mergeOperations, operationIsCancellab
 
 function operation(id, state = "running", version = 1, progress = {}) {
   return { operationId: id, type: "copy", state, updateVersion: version, createdAt: `2026-01-01T00:00:0${id}.000Z`,
-    finishedAt: null, error: null, progress: { processedFiles: 0, totalFiles: null, processedBytes: 0,
+    finishedAt: null, error: null, pendingConflict: null, progress: { processedFiles: 0, totalFiles: null, processedBytes: 0,
       totalBytes: null, currentFile: "", ...progress } };
 }
 
@@ -64,4 +64,21 @@ test("only live operation states are cancellable and byte values are readable", 
   for (const state of ["completed", "failed", "cancelled"]) assert.equal(operationIsCancellable(state), false);
   assert.equal(formatBytes(0), "0 Б");
   assert.equal(formatBytes(1536), "1.50 КБ");
+});
+
+test("a conflict event remains recoverable from a newer backend snapshot", async () => {
+  const request = Promise.withResolvers();
+  let listener, state = [];
+  connectOperationUpdates({ list: () => request.promise, cancel: async () => operation("1"), resolveConflict: async () => operation("1") },
+    receive => { listener = receive; return () => {}; },
+    list => { state = mergeOperations(state, list); }, event => { state = applyOperationEvent(state, event); }, error => assert.fail(error));
+  const waiting = { ...operation("1", "waiting-for-user", 3), pendingConflict: { operationId: "1", conflictId: "c1",
+    revision: 3, type: "file/file", source: { path: "/source", kind: "file", size: 1, modifiedAt: null },
+    destination: { path: "/target", kind: "file", size: 2, modifiedAt: null },
+    allowedActions: ["replace", "skip", "keep-both", "cancel-operation"] } };
+  listener({ operationId: "1", state: waiting.state, progress: waiting.progress, updateVersion: 3, operation: waiting });
+  request.resolve([waiting]);
+  await Promise.resolve(); await Promise.resolve();
+  assert.equal(state[0].pendingConflict.conflictId, "c1");
+  assert.equal(state[0].state, "waiting-for-user");
 });

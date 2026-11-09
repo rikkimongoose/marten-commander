@@ -70,6 +70,33 @@ try {
   await cell("left", "..").click(); await focused("left", "..");
   await operationsDialog.getByRole("button", { name: "Закрыть операции" }).click();
   await operationsDialog.waitFor({ state: "hidden" });
+  await page.evaluate(() => { window.navigationTest.operations = [{ operationId: "test-operation", type: "file.copy",
+    state: "waiting-for-user", updateVersion: 2, createdAt: "2026-01-01T00:00:00Z", finishedAt: null, error: null,
+    context: { activePanel: "left", sources: [], sourceDirectory: "", destinationDirectory: null, parametersJSON: "{}" },
+    progress: { processedFiles: 0, totalFiles: 1, processedBytes: 0, totalBytes: 10, currentFile: "отчёт.txt" },
+    pendingConflict: { operationId: "test-operation", conflictId: "conflict-1", revision: 2, type: "file/file",
+      source: { path: "/source/отчёт.txt", kind: "file", size: 10, modifiedAt: "2026-01-01T00:00:00Z" },
+      destination: { path: "/target/отчёт.txt", kind: "file", size: 20, modifiedAt: "2026-01-02T00:00:00Z" },
+      allowedActions: ["replace", "skip", "keep-both", "cancel-operation"] } }]; });
+  await operationsButton.click();
+  const conflictDialog = page.getByRole("dialog", { name: "Файл уже существует" });
+  await conflictDialog.getByText("/source/отчёт.txt").waitFor();
+  await conflictDialog.getByText("/target/отчёт.txt").waitFor();
+  await page.keyboard.press("Escape");
+  await conflictDialog.waitFor({ state: "hidden" });
+  assert.equal(await page.evaluate(() => window.navigationTest.operations[0].state), "waiting-for-user",
+    "Escape leaves the backend conflict pending");
+  await operationsDialog.getByRole("button", { name: "Разрешить конфликт" }).click();
+  await conflictDialog.getByRole("radio", { name: "Пропустить источник" }).check();
+  await conflictDialog.getByRole("checkbox", { name: /Применить ко всем совместимым/ }).check();
+  await conflictDialog.getByRole("button", { name: "Применить" }).click();
+  await conflictDialog.waitFor({ state: "hidden" });
+  assert.deepEqual(await page.evaluate(() => window.navigationTest.conflictResolutions.at(-1)), {
+    operationId: "test-operation", conflictId: "conflict-1", revision: 2, action: "skip", applyToAll: true, customTargetPath: "",
+  });
+  await operationsDialog.getByRole("button", { name: "Закрыть операции" }).click();
+  await operationsDialog.waitFor({ state: "hidden" });
+  await cell("left", "..").click(); await focused("left", "..");
   const mkdirButton = functionBar.getByRole("button", { name: /F7.*Каталог/ });
   assert.equal(await mkdirButton.isDisabled(), false, "F7 becomes available after the source directory loads");
   assert.equal(await panel("left").getByText(/^Левая панель:/).count(), 0);

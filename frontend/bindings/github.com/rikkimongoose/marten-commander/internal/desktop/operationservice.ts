@@ -27,3 +27,11 @@ export function GetOperation(id: string): $CancellablePromise<operations$0.Opera
 export function ListOperations(): $CancellablePromise<operations$0.Operation[] | null> {
     return $Call.ByID(3643660471);
 }
+
+export function ListPendingConflicts(): $CancellablePromise<operations$0.ConflictRequest[] | null> {
+    return $Call.ByID(2598074727);
+}
+
+export function ResolveConflict(resolution: operations$0.ConflictResolution): $CancellablePromise<operations$0.Operation> {
+    return $Call.ByID(1126016813, resolution);
+}
