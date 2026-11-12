@@ -72,11 +72,16 @@ type copyCommandService interface {
 	Start(context.Context, operations.ContextSnapshot, []string, string) (operations.Operation, error)
 }
 
+type moveCommandService interface {
+	Start(context.Context, operations.ContextSnapshot, []string, string) (operations.Operation, error)
+}
+
 // CommandService is the Wails transport boundary. It decodes opaque native
 // locations and delegates supported use cases to the application layer.
 type CommandService struct {
 	files  fileCommandService
 	copies copyCommandService
+	moves  moveCommandService
 }
 
 func NewCommandService(files fileCommandService, copies ...copyCommandService) *CommandService {
@@ -85,6 +90,15 @@ func NewCommandService(files fileCommandService, copies ...copyCommandService) *
 		service.copies = copies[0]
 	}
 	return service
+}
+
+func (s *CommandService) withMoves(moves moveCommandService) *CommandService {
+	s.moves = moves
+	return s
+}
+
+func NewCommandServiceWithMove(files fileCommandService, copies copyCommandService, moves moveCommandService) *CommandService {
+	return NewCommandService(files, copies).withMoves(moves)
 }
 
 func (s *CommandService) ExecuteCommand(ctx context.Context, request CommandRequest) error {
@@ -212,6 +226,62 @@ func (s *CommandService) ExecuteCommand(ctx context.Context, request CommandRequ
 				return &CommandError{"copy_failed", fmt.Sprintf("Недостаточно прав для копирования в %q.", display(destination))}
 			default:
 				return &CommandError{"copy_failed", fmt.Sprintf("Не удалось начать копирование: %v", err)}
+			}
+		}
+		return nil
+	}
+	if request.Type == "file.move" {
+		if len(params) != 1 {
+			return &CommandError{"invalid_params", "Команда перемещения требует только путь назначения."}
+		}
+		var destination string
+		if raw, ok := params["destination"]; !ok || json.Unmarshal(raw, &destination) != nil ||
+			!filepath.IsAbs(destination) || strings.ContainsRune(destination, 0) {
+			return &CommandError{"invalid_params", "Укажите абсолютный локальный путь назначения."}
+		}
+		sourcePanel, _ := request.Context.sourceAndTarget()
+		if sourcePanel.DirectoryLocation == nil {
+			return &CommandError{"unavailable", "Исходный каталог ещё не открыт."}
+		}
+		sourceDirectory, ok := decodeLocation(*sourcePanel.DirectoryLocation)
+		if !ok {
+			return &CommandError{"invalid_context", "Некорректный адрес исходного каталога."}
+		}
+		locations := sourcePanel.effectiveSelection()
+		sources := make([]string, 0, len(locations))
+		for _, location := range locations {
+			path, valid := decodeLocation(location)
+			if !valid || filepath.Dir(path) != filepath.Clean(sourceDirectory) || filepath.Base(path) == "." || filepath.Base(path) == ".." {
+				return &CommandError{"invalid_context", "Источник перемещения не принадлежит открытому каталогу."}
+			}
+			sources = append(sources, path)
+		}
+		if len(sources) == 0 {
+			return &CommandError{"unavailable", "Не выбран файл или каталог для перемещения."}
+		}
+		if s.moves == nil {
+			return &CommandError{"unavailable", "Перемещение файлов недоступно."}
+		}
+		snapshot, err := OperationContextSnapshot(request.Context, request.Params)
+		if err != nil {
+			return err
+		}
+		parent := destination
+		if len(sources) == 1 {
+			parent = filepath.Dir(destination)
+		}
+		encodedDestination := encode(parent)
+		snapshot.DestinationDirectory = &encodedDestination
+		if _, err := s.moves.Start(ctx, snapshot, sources, destination); err != nil {
+			switch {
+			case errors.Is(err, fs.ErrInvalid):
+				return &CommandError{"invalid_params", err.Error()}
+			case errors.Is(err, fs.ErrNotExist):
+				return &CommandError{"move_failed", "Источник или каталог назначения больше не существует."}
+			case errors.Is(err, fs.ErrPermission):
+				return &CommandError{"move_failed", "Недостаточно прав для перемещения."}
+			default:
+				return &CommandError{"move_failed", fmt.Sprintf("Не удалось начать перемещение: %v", err)}
 			}
 		}
 		return nil

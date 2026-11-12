@@ -27,7 +27,7 @@ export interface CommandRequest {
 }
 
 export type CommandErrorCode = "unknown_command" | "duplicate_command" | "unavailable" |
-  "invalid_context" | "invalid_request" | "invalid_params" | "open_failed" | "mkdir_failed" | "copy_failed" | "handler_failed";
+  "invalid_context" | "invalid_request" | "invalid_params" | "open_failed" | "mkdir_failed" | "copy_failed" | "move_failed" | "handler_failed";
 
 export class CommandError extends Error {
   readonly code: CommandErrorCode;

@@ -107,6 +107,7 @@ type copyRunner struct {
 	destination string
 	progress    operations.Progress
 	copied      uint64
+	skipped     uint64
 }
 
 func (r *copyRunner) Run(ctx context.Context, reporter operations.Reporter) error {
@@ -267,6 +268,9 @@ func (r *copyRunner) copyEntry(ctx context.Context, reporter operations.Reporter
 
 func (r *copyRunner) copyDirectory(ctx context.Context, reporter operations.Reporter, source core.FileEntry, destination string) error {
 	action, _, err := r.destinationAction(ctx, reporter, source, destination)
+	if action == operations.Skip {
+		r.skipped++
+	}
 	if err != nil || action == operations.Skip {
 		return err
 	}
@@ -305,9 +309,16 @@ func (r *copyRunner) copyDirectory(ctx context.Context, reporter operations.Repo
 func (r *copyRunner) copyLeaf(ctx context.Context, reporter operations.Reporter, source core.FileEntry, destination string) (err error) {
 	keepBothBase := destination
 	action, fingerprint, err := r.destinationAction(ctx, reporter, source, destination)
+	if action == operations.Skip {
+		r.skipped++
+	}
 	if err != nil || action == operations.Skip {
 		return err
 	}
+	return r.copyLeafResolved(ctx, reporter, source, destination, keepBothBase, action, fingerprint)
+}
+
+func (r *copyRunner) copyLeafResolved(ctx context.Context, reporter operations.Reporter, source core.FileEntry, destination, keepBothBase string, action operations.ConflictAction, fingerprint core.FileFingerprint) (err error) {
 	if action == operations.KeepBoth {
 		destination, err = operations.NextKeepBothPath(keepBothBase, func(candidate string) (bool, error) {
 			_, statErr := r.filesystem.Lstat(ctx, candidate)

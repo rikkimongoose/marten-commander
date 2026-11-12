@@ -236,6 +236,61 @@ func TestCopyCommandRejectsInvalidContextAndDestination(t *testing.T) {
 	}
 }
 
+func TestMoveCommandUsesImmutableSelectionAndDestination(t *testing.T) {
+	request := commandFixture(t)
+	request.Type = "file.move"
+	destination := t.TempDir()
+	request.Params = json.RawMessage(`{"destination":` + string(mustJSON(t, destination)) + `}`)
+	moves := &copyServiceStub{}
+	service := NewCommandService(&fileServiceStub{}).withMoves(moves)
+	if err := service.ExecuteCommand(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	selected, _ := decodeLocation(request.Context.Left.SelectedLocations[0])
+	if !reflect.DeepEqual(moves.sources, []string{selected}) || moves.destination != destination {
+		t.Fatalf("move start: %#v", moves)
+	}
+	if moves.snapshot.ActivePanel != "left" || moves.snapshot.SourceDirectory != *request.Context.Left.DirectoryLocation ||
+		moves.snapshot.DestinationDirectory == nil || *moves.snapshot.DestinationDirectory != encode(filepath.Dir(destination)) {
+		t.Fatalf("snapshot: %#v", moves.snapshot)
+	}
+	request.Context.Left.SelectedLocations = []string{}
+	focused, _ := decodeLocation(*request.Context.Left.FocusedLocation)
+	if err := service.ExecuteCommand(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(moves.sources, []string{focused}) {
+		t.Fatalf("cursor fallback: %q", moves.sources)
+	}
+}
+
+func TestMoveCommandRejectsParentAndInvalidMultipleTarget(t *testing.T) {
+	request := commandFixture(t)
+	request.Type = "file.move"
+	request.Params = json.RawMessage(`{"destination":"relative"}`)
+	err := NewCommandService(&fileServiceStub{}).withMoves(&copyServiceStub{}).ExecuteCommand(context.Background(), request)
+	var commandErr *CommandError
+	if !errors.As(err, &commandErr) || commandErr.Code != "invalid_params" {
+		t.Fatalf("relative: %#v", err)
+	}
+	parent := filepath.Join(filepath.Dir(mustDecode(t, *request.Context.Left.DirectoryLocation)), "..")
+	request.Context.Left.SelectedLocations = []string{encode(parent)}
+	request.Params = json.RawMessage(`{"destination":"/tmp"}`)
+	err = NewCommandService(&fileServiceStub{}).withMoves(&copyServiceStub{}).ExecuteCommand(context.Background(), request)
+	if !errors.As(err, &commandErr) || commandErr.Code != "invalid_context" {
+		t.Fatalf("parent: %#v", err)
+	}
+}
+
+func mustDecode(t *testing.T, value string) string {
+	t.Helper()
+	decoded, ok := decodeLocation(value)
+	if !ok {
+		t.Fatal("decode")
+	}
+	return decoded
+}
+
 func mustJSON(t *testing.T, value string) []byte {
 	t.Helper()
 	data, err := json.Marshal(value)

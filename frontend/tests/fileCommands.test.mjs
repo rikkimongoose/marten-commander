@@ -136,3 +136,40 @@ test("file.copy falls back to cursor and cancellation has no side effects", asyn
   context.left.focusedLocation = null;
   assert.equal(dispatcher.availability("file.copy").enabled, false);
 });
+
+test("file.move freezes arbitrary selection and edited target while panels change", async () => {
+  const context = { activePanel: "left",
+    left: { directoryLocation: location("/left"), selectedLocations: [location("/left/one"), location("/left/four")],
+      focusedLocation: location("/left/seven") },
+    right: { directoryLocation: location("/right"), selectedLocations: [], focusedLocation: null } };
+  const answer = Promise.withResolvers();
+  const calls = [], completed = [];
+  const dispatcher = new CommandDispatcher(() => context, () => "move-1");
+  registerFileCommands(dispatcher, request => calls.push(request), undefined, undefined, {
+    prompt: { open: snapshot => { assert.equal(snapshot.activePanel, "left"); return answer.promise; },
+      retry: () => assert.fail("no retry"), complete: () => completed.push(true) },
+  });
+  const pending = dispatcher.dispatch("file.move");
+  context.activePanel = "right";
+  context.left.selectedLocations = [location("/left/changed")];
+  answer.resolve({ destination: "/right/Новое имя" });
+  assert.equal(await pending, "executed");
+  assert.deepEqual(calls[0].context.left.selectedLocations, [location("/left/one"), location("/left/four")]);
+  assert.deepEqual(calls[0].params, { destination: "/right/Новое имя" });
+  assert.equal(completed.length, 1);
+});
+
+test("file.move shortcut preparation cancels without backend and falls back to cursor", async () => {
+  const context = { activePanel: "left",
+    left: { directoryLocation: location("/left"), selectedLocations: [], focusedLocation: location("/left/current") },
+    right: { directoryLocation: location("/right"), selectedLocations: [], focusedLocation: null } };
+  let calls = 0;
+  const dispatcher = new CommandDispatcher(() => context);
+  registerFileCommands(dispatcher, () => { calls++; }, undefined, undefined, {
+    prompt: { open: snapshot => { assert.equal(snapshot.left.focusedLocation, location("/left/current")); return CANCEL_COMMAND; },
+      retry: () => assert.fail("no retry"), complete: () => assert.fail("no completion") },
+  });
+  assert.equal(dispatcher.availability("file.move").enabled, true);
+  assert.equal(await dispatcher.dispatch("file.move"), "cancelled");
+  assert.equal(calls, 0);
+});

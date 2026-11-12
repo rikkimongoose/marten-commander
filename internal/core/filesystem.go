@@ -11,6 +11,7 @@ import (
 
 var (
 	ErrDestinationChanged        = errors.New("destination changed after conflict resolution")
+	ErrSourceChanged             = errors.New("source changed before it could be removed")
 	ErrTemporaryHoldsDestination = errors.New("temporary path contains the displaced destination and must be preserved")
 )
 
@@ -120,4 +121,13 @@ type CopyDestination interface {
 	PublishNew(ctx context.Context, temporary, destination string) error
 	PublishReplace(ctx context.Context, temporary, destination string, expected FileFingerprint) error
 	RemoveTemporary(ctx context.Context, path string) error
+}
+
+// MoveFileSystem contains the narrow atomic mutations needed by the move use
+// case. Implementations must never overwrite an unapproved destination and
+// must condition source removal on the captured fingerprint.
+type MoveFileSystem interface {
+	RenameNew(ctx context.Context, source, destination string, expected FileFingerprint) error
+	RenameReplace(ctx context.Context, source, destination string, expectedSource, expectedDestination FileFingerprint) error
+	RemoveSource(ctx context.Context, source string, expected FileFingerprint) error
 }

@@ -11,9 +11,14 @@ interface CopyDialogProps {
   submit: (destination: string) => void;
   cancel: () => void;
   closed: () => void;
+  title?: string;
+  destinationLabel?: string;
+  confirmLabel?: string;
+  destinationHelp?: string;
 }
 
-export function CopyDialog({ open, sources, initialDestination, busy, error, submit, cancel, closed }: CopyDialogProps) {
+export function CopyDialog({ open, sources, initialDestination, busy, error, submit, cancel, closed,
+  title = "Копировать", destinationLabel = "Каталог назначения", confirmLabel = "Копировать", destinationHelp }: CopyDialogProps) {
   const [destination, setDestination] = useState("");
   const [validation, setValidation] = useState("");
   const input = useRef<HTMLInputElement>(null);
@@ -29,7 +34,7 @@ export function CopyDialog({ open, sources, initialDestination, busy, error, sub
   function confirm() {
     if (busy) return;
     const message = !destination.trim() || !destination.startsWith("/")
-      ? "Укажите абсолютный локальный каталог назначения." : "";
+      ? "Укажите абсолютный локальный путь назначения." : "";
     setValidation(message);
     if (!message) submit(destination);
   }
@@ -37,19 +42,20 @@ export function CopyDialog({ open, sources, initialDestination, busy, error, sub
   return <Dialog open={open} onClose={(_, reason) => { if (!busy && reason === "escapeKeyDown") cancel(); }}
     slotProps={{ paper: { component: "form", onSubmit: event => { event.preventDefault(); confirm(); } },
       transition: { onExited: () => queueMicrotask(closed) } }}>
-    <DialogTitle>Копировать</DialogTitle>
+    <DialogTitle>{title}</DialogTitle>
     <DialogContent sx={{ minWidth: { xs: 300, sm: 520 } }}>
       <Typography variant="body2" sx={{ mb: 0.5 }}>Источники: {sources.length}</Typography>
       <List dense sx={{ maxHeight: 160, overflow: "auto", mb: 1 }}>
         {sources.map((name, index) => <ListItem key={`${index}-${name}`} sx={{ py: 0.25, overflowWrap: "anywhere" }}>{name}</ListItem>)}
       </List>
       {(error || validation) && <Alert severity="error" sx={{ mb: 1 }}>{error || validation}</Alert>}
-      <TextField inputRef={input} fullWidth label="Каталог назначения" value={destination} disabled={busy}
-        error={!!validation} onChange={event => { setDestination(event.target.value); setValidation(""); }} />
+      <TextField inputRef={input} fullWidth label={destinationLabel} value={destination} disabled={busy}
+        error={!!validation} helperText={destinationHelp}
+        onChange={event => { setDestination(event.target.value); setValidation(""); }} />
     </DialogContent>
     <DialogActions>
       <Button onClick={cancel} disabled={busy}>Отмена</Button>
-      <Button type="submit" variant="contained" disabled={busy || !destination.trim()}>Копировать</Button>
+      <Button type="submit" variant="contained" disabled={busy || !destination.trim()}>{confirmLabel}</Button>
     </DialogActions>
   </Dialog>;
 }

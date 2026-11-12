@@ -94,6 +94,13 @@ type Reporter interface {
 	RequestConflict(ConflictRequest) (ConflictDecision, error)
 }
 
+// AtomicReporter couples a short irreversible filesystem mutation with its
+// state update. Cancellation waits for the callback, so a successful final
+// rename cannot be reported as cancelled.
+type AtomicReporter interface {
+	Atomic(func() (Progress, error), bool) error
+}
+
 // RunError lets a runner return a stable machine-readable failure code.
 type RunError struct {
 	Code    string
@@ -435,6 +442,52 @@ func (r reporter) Report(progress Progress) error {
 	}
 	rec.operation.Progress = cloneProgress(progress)
 	rec.operation.UpdateVersion++
+	copy := cloneOperation(rec.operation)
+	r.manager.mu.Unlock()
+	r.manager.enqueue(copy)
+	return nil
+}
+
+func (r reporter) Atomic(action func() (Progress, error), final bool) error {
+	if action == nil {
+		return errors.New("nil atomic action")
+	}
+	r.manager.mu.Lock()
+	rec, ok := r.manager.operations[r.id]
+	if !ok {
+		r.manager.mu.Unlock()
+		return ErrNotFound
+	}
+	if rec.operation.State != Running {
+		state := rec.operation.State
+		r.manager.mu.Unlock()
+		return fmt.Errorf("%w: cannot run atomic action while %s", ErrInvalidTransition, state)
+	}
+	if err := r.ctx.Err(); err != nil {
+		r.manager.mu.Unlock()
+		return err
+	}
+	progress, err := action()
+	if err != nil {
+		r.manager.mu.Unlock()
+		return err
+	}
+	if progress.TotalFiles != nil && progress.ProcessedFiles > *progress.TotalFiles ||
+		progress.TotalBytes != nil && progress.ProcessedBytes > *progress.TotalBytes {
+		r.manager.mu.Unlock()
+		return errors.New("atomic progress exceeds total")
+	}
+	if final {
+		progress.CurrentFile = ""
+	}
+	rec.operation.Progress = cloneProgress(progress)
+	rec.operation.UpdateVersion++
+	if final {
+		if err := r.manager.transitionLocked(rec, Completed); err != nil {
+			r.manager.mu.Unlock()
+			return err
+		}
+	}
 	copy := cloneOperation(rec.operation)
 	r.manager.mu.Unlock()
 	r.manager.enqueue(copy)

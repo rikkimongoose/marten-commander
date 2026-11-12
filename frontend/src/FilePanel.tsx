@@ -179,7 +179,7 @@ export const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(function Fi
         const preferred = created.current;
         if (preferred?.directoryLocation === next.location) {
           created.current = undefined;
-          const entry = next.entries?.find(item => item.name === preferred.name && item.kind === "directory");
+          const entry = next.entries?.find(item => item.name === preferred.name);
           if (entry && (showHiddenRef.current || !entry.hidden)) {
             view.current = entry.id;
             view.preferred = entry.id;

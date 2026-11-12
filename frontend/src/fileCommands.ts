@@ -20,6 +20,8 @@ export interface CopyPrompt {
   complete(): void;
 }
 export interface CopyActions { readonly prompt: CopyPrompt; }
+export type MovePromptResult = CopyPromptResult;
+export interface MoveActions { readonly prompt: CopyPrompt; }
 
 function copyParams(result: CopyPromptResult): JsonObject | typeof CANCEL_COMMAND {
   if (result === CANCEL_COMMAND) return result;
@@ -48,6 +50,7 @@ export function registerFileCommands(
   executeBackend: ExecuteFileCommand = createCommandBackend(),
   mkdir?: MkdirActions,
   copy?: CopyActions,
+  move?: MoveActions,
 ) {
   dispatcher.register("file.open", {
     available: context => sourceAndTarget(context).source.directoryLocation === null
@@ -104,6 +107,30 @@ export function registerFileCommands(
             copy.prompt.complete();
             return;
           }
+          request = Object.freeze({ ...initial, params: copyParams(result) as JsonObject });
+        }
+      }
+    },
+  });
+  if (move) dispatcher.register("file.move", {
+    available: context => {
+      const { source, target } = sourceAndTarget(context);
+      if (source.directoryLocation === null) return { enabled: false, reason: "Исходный каталог ещё не открыт." };
+      if (target.directoryLocation === null) return { enabled: false, reason: "Каталог назначения ещё не открыт." };
+      if (effectiveSelection(source).length === 0) return { enabled: false, reason: "Не выбран файл или каталог для перемещения." };
+      return { enabled: true };
+    },
+    prepare: async context => copyParams(await move.prompt.open(context)),
+    execute: async initial => {
+      let request = initial;
+      for (;;) {
+        try {
+          await executeBackend(request);
+          move.prompt.complete();
+          return;
+        } catch (error) {
+          const result = await move.prompt.retry(commandErrorMessage(error));
+          if (result === CANCEL_COMMAND) { move.prompt.complete(); return; }
           request = Object.freeze({ ...initial, params: copyParams(result) as JsonObject });
         }
       }

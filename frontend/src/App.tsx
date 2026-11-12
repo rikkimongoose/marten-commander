@@ -12,10 +12,11 @@ import { FunctionBar } from "./FunctionBar";
 import { CommandLine } from "./CommandLine";
 import { GetHomeDirectory } from "../bindings/github.com/rikkimongoose/marten-commander/internal/desktop/volumeservice";
 import { MkdirDialog } from "./MkdirDialog";
-import type { CopyPromptResult, MkdirPromptResult } from "./fileCommands";
+import type { CopyPromptResult, MkdirPromptResult, MovePromptResult } from "./fileCommands";
 import { OperationsCenter } from "./OperationsCenter";
 import { CopyDialog } from "./CopyDialog";
 import type { Operation } from "../bindings/github.com/rikkimongoose/marten-commander/internal/operations/models";
+import { moveFocusCandidates, operationRefreshLocations } from "./operationRefresh";
 
 type MkdirDialogState = { open: boolean; destination: string; busy: boolean; error: string };
 type CopyDialogState = { open: boolean; sources: string[]; destination: string; busy: boolean; error: string };
@@ -30,6 +31,8 @@ export default function App() {
   const mkdirResolve = useRef<((result: MkdirPromptResult) => void)>();
   const [copyDialog, setCopyDialog] = useState<CopyDialogState>({ open: false, sources: [], destination: "", busy: false, error: "" });
   const copyResolve = useRef<((result: CopyPromptResult) => void)>();
+  const [moveDialog, setMoveDialog] = useState<CopyDialogState>({ open: false, sources: [], destination: "", busy: false, error: "" });
+  const moveResolve = useRef<((result: MovePromptResult) => void)>();
   const [, setCommandContextVersion] = useState(0);
   const commandContextChanged = useCallback(() => setCommandContextVersion(version => version + 1), []);
   const [commands] = useState(() => {
@@ -73,6 +76,8 @@ export default function App() {
       },
     }, {
       prompt: { open: openCopyDialog, retry: retryCopyDialog, complete: closeCopyDialog },
+    }, {
+      prompt: { open: openMoveDialog, retry: retryMoveDialog, complete: closeMoveDialog },
     });
     return dispatcher;
   });
@@ -148,13 +153,49 @@ export default function App() {
     setCopyDialog(value => ({ ...value, open: false, error: "" }));
     resolve?.(CANCEL_COMMAND);
   }
-  function refreshCopyDestination(operation: Operation) {
-    if (operation.type !== "file.copy" || !operation.context.destinationDirectory) return;
+  function openMoveDialog(context: CommandContext): Promise<MovePromptResult> {
+    const { source } = sourceAndTarget(context);
+    const sourceHandle = context.activePanel === "left" ? left.current : right.current;
+    const targetHandle = context.activePanel === "left" ? right.current : left.current;
+    const locations = effectiveSelection(source);
+    setMoveDialog({ open: true, sources: sourceHandle?.describeLocations(locations) ?? [...locations],
+      destination: targetHandle?.getDisplayPath() ?? "", busy: false, error: "" });
+    return new Promise(resolve => { moveResolve.current = resolve; });
+  }
+  function retryMoveDialog(message: string): Promise<MovePromptResult> {
+    setMoveDialog(value => ({ ...value, busy: false, error: message }));
+    return new Promise(resolve => { moveResolve.current = resolve; });
+  }
+  function closeMoveDialog() {
+    moveResolve.current = undefined;
+    setMoveDialog(value => ({ ...value, open: false, busy: false, error: "" }));
+  }
+  function submitMove(destination: string) {
+    const resolve = moveResolve.current;
+    if (!resolve || moveDialog.busy) return;
+    moveResolve.current = undefined;
+    setMoveDialog(value => ({ ...value, destination, busy: true, error: "" }));
+    resolve({ destination });
+  }
+  function cancelMove() {
+    const resolve = moveResolve.current;
+    if (moveDialog.busy) return;
+    moveResolve.current = undefined;
+    setMoveDialog(value => ({ ...value, open: false, error: "" }));
+    resolve?.(CANCEL_COMMAND);
+  }
+  function refreshOperationPanels(operation: Operation) {
     // Refresh any panel that still displays the fixed destination. Navigation
     // performed after launch is never undone, and an edited destination may
     // currently be visible in either panel.
-    left.current?.refreshDirectory(operation.context.destinationDirectory);
-    right.current?.refreshDirectory(operation.context.destinationDirectory);
+    for (const location of operationRefreshLocations(operation)) {
+      left.current?.refreshDirectory(location);
+      right.current?.refreshDirectory(location);
+    }
+    for (const candidate of moveFocusCandidates(operation)) {
+      left.current?.refreshCreated(candidate.directoryLocation, candidate.name);
+      right.current?.refreshCreated(candidate.directoryLocation, candidate.name);
+    }
   }
   const activePath = (active === "left" ? left.current : right.current)?.getDisplayPath() ?? "";
   return (
@@ -172,12 +213,16 @@ export default function App() {
           <Box sx={{ flex: 1, minWidth: 0 }}>
             <CommandLine path={activePath} dispatch={dispatch} report={setCommandError} returnToPanel={focusActivePanel} />
           </Box>
-          <OperationsCenter onOperationFinished={refreshCopyDestination} />
+          <OperationsCenter onOperationFinished={refreshOperationPanels} />
         </Box>
         <FunctionBar availability={id => commands.availability(id)} dispatch={dispatch} />
         <MkdirDialog {...mkdirDialog} submit={submitMkdir} cancel={cancelMkdir} closed={focusActivePanel} />
         <CopyDialog open={copyDialog.open} sources={copyDialog.sources} initialDestination={copyDialog.destination}
           busy={copyDialog.busy} error={copyDialog.error} submit={submitCopy} cancel={cancelCopy} closed={focusActivePanel} />
+        <CopyDialog open={moveDialog.open} sources={moveDialog.sources} initialDestination={moveDialog.destination}
+          busy={moveDialog.busy} error={moveDialog.error} submit={submitMove} cancel={cancelMove} closed={focusActivePanel}
+          title="Перемещение файлов" destinationLabel="Каталог или новый путь назначения" confirmLabel="Переместить"
+          destinationHelp="Для одного объекта существующий каталог сохраняет имя, а новый путь задаёт новое имя. Для нескольких объектов нужен существующий каталог." />
       </Box>
     </AgGridProvider>
   );
