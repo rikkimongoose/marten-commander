@@ -31,6 +31,23 @@ function copyParams(result: CopyPromptResult): JsonObject | typeof CANCEL_COMMAN
   return { destination: result.destination };
 }
 
+export function moveDestinationError(destination: string, sourceCount: number): string {
+  if (!destination.trim() || destination.includes("\0")) return "Укажите назначение перемещения.";
+  if (destination.startsWith("/")) return "";
+  if (sourceCount !== 1) return "Для нескольких объектов укажите абсолютный путь существующего каталога.";
+  if (destination === "." || destination === ".." || destination.includes("/")) {
+    return "Для переименования укажите одно новое имя без пути либо абсолютный путь назначения.";
+  }
+  return "";
+}
+
+function moveParams(result: MovePromptResult, context: CommandContext): JsonObject | typeof CANCEL_COMMAND {
+  if (result === CANCEL_COMMAND) return result;
+  const error = moveDestinationError(result.destination, effectiveSelection(sourceAndTarget(context).source).length);
+  if (error) throw new CommandError("invalid_params", error);
+  return { destination: result.destination };
+}
+
 export function directoryNameError(name: string): string {
   if (!name || !name.trim()) return "Введите имя нового каталога.";
   if (name === "." || name === "..") return "Имена «.» и «..» использовать нельзя.";
@@ -135,7 +152,7 @@ export function registerFileCommands(
       if (effectiveSelection(source).length === 0) return { enabled: false, reason: "Не выбран файл или каталог для перемещения." };
       return { enabled: true };
     },
-    prepare: async context => copyParams(await move.prompt.open(context)),
+    prepare: async context => moveParams(await move.prompt.open(context), context),
     execute: async initial => {
       let request = initial;
       for (;;) {
@@ -146,7 +163,7 @@ export function registerFileCommands(
         } catch (error) {
           const result = await move.prompt.retry(commandErrorMessage(error));
           if (result === CANCEL_COMMAND) { move.prompt.complete(); return; }
-          request = Object.freeze({ ...initial, params: copyParams(result) as JsonObject });
+          request = Object.freeze({ ...initial, params: moveParams(result, initial.context) as JsonObject });
         }
       }
     },

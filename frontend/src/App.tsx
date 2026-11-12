@@ -7,7 +7,7 @@ import { CANCEL_COMMAND, CommandDispatcher, CommandError, commandErrorMessage, e
   type CommandContext, type CommandId, type JsonObject, type PanelId } from "./commands";
 import { registerHomeCommand, registerLocationCommand, registerPathCommand } from "./locationCommand";
 import { registerNavigationCommands } from "./navigationCommands";
-import { registerFileCommands } from "./fileCommands";
+import { moveDestinationError, registerFileCommands } from "./fileCommands";
 import { FunctionBar } from "./FunctionBar";
 import { CommandLine } from "./CommandLine";
 import { GetHomeDirectory } from "../bindings/github.com/rikkimongoose/marten-commander/internal/desktop/volumeservice";
@@ -221,8 +221,11 @@ export default function App() {
           busy={copyDialog.busy} error={copyDialog.error} submit={submitCopy} cancel={cancelCopy} closed={focusActivePanel} />
         <CopyDialog open={moveDialog.open} sources={moveDialog.sources} initialDestination={moveDialog.destination}
           busy={moveDialog.busy} error={moveDialog.error} submit={submitMove} cancel={cancelMove} closed={focusActivePanel}
-          title="Перемещение файлов" destinationLabel="Каталог или новый путь назначения" confirmLabel="Переместить"
-          destinationHelp="Для одного объекта существующий каталог сохраняет имя, а новый путь задаёт новое имя. Для нескольких объектов нужен существующий каталог." />
+          title="Перемещение файлов" destinationLabel="Новое имя, каталог или полный путь" confirmLabel="Переместить"
+          destinationHelp={moveDialog.sources.length === 1
+            ? "Новое имя переименует объект на месте. Существующий каталог переместит его без переименования; полный новый путь выполнит оба действия."
+            : "Для нескольких объектов укажите абсолютный путь существующего каталога."}
+          validateDestination={destination => moveDestinationError(destination, moveDialog.sources.length)} />
       </Box>
     </AgGridProvider>
   );

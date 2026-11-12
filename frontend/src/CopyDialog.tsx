@@ -15,10 +15,12 @@ interface CopyDialogProps {
   destinationLabel?: string;
   confirmLabel?: string;
   destinationHelp?: string;
+  validateDestination?: (destination: string) => string;
 }
 
 export function CopyDialog({ open, sources, initialDestination, busy, error, submit, cancel, closed,
-  title = "Копировать", destinationLabel = "Каталог назначения", confirmLabel = "Копировать", destinationHelp }: CopyDialogProps) {
+  title = "Копировать", destinationLabel = "Каталог назначения", confirmLabel = "Копировать", destinationHelp,
+  validateDestination }: CopyDialogProps) {
   const [destination, setDestination] = useState("");
   const [validation, setValidation] = useState("");
   const input = useRef<HTMLInputElement>(null);
@@ -33,8 +35,8 @@ export function CopyDialog({ open, sources, initialDestination, busy, error, sub
 
   function confirm() {
     if (busy) return;
-    const message = !destination.trim() || !destination.startsWith("/")
-      ? "Укажите абсолютный локальный путь назначения." : "";
+    const message = validateDestination?.(destination) ?? (!destination.trim() || !destination.startsWith("/")
+      ? "Укажите абсолютный локальный путь назначения." : "");
     setValidation(message);
     if (!message) submit(destination);
   }

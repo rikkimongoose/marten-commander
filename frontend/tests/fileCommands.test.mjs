@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { CANCEL_COMMAND, CommandDispatcher, CommandError } from "../src/commands.ts";
-import { directoryNameError, registerFileCommands } from "../src/fileCommands.ts";
+import { directoryNameError, moveDestinationError, registerFileCommands } from "../src/fileCommands.ts";
 
 const location = value => Buffer.from(value).toString("base64url");
 
@@ -203,6 +203,28 @@ test("file.move freezes arbitrary selection and edited target while panels chang
   assert.deepEqual(calls[0].context.left.selectedLocations, [location("/left/one"), location("/left/four")]);
   assert.deepEqual(calls[0].params, { destination: "/right/Новое имя" });
   assert.equal(completed.length, 1);
+});
+
+test("single-source move accepts a plain new name and keeps the frozen source context", async () => {
+  const context = { activePanel: "left",
+    left: { directoryLocation: location("/left"), selectedLocations: [], focusedLocation: location("/left/старое имя") },
+    right: { directoryLocation: location("/right"), selectedLocations: [], focusedLocation: null } };
+  let received;
+  const dispatcher = new CommandDispatcher(() => context);
+  registerFileCommands(dispatcher, request => { received = request; }, undefined, undefined, {
+    prompt: { open: () => ({ destination: "новое имя" }), retry: () => assert.fail("no retry"), complete: () => {} },
+  });
+  assert.equal(await dispatcher.dispatch("file.move"), "executed");
+  assert.deepEqual(received.params, { destination: "новое имя" });
+  assert.equal(received.context.left.focusedLocation, location("/left/старое имя"));
+});
+
+test("move destination validation distinguishes single rename from multiple move", () => {
+  assert.equal(moveDestinationError("новое имя", 1), "");
+  assert.equal(moveDestinationError("/tmp/target/new name", 1), "");
+  assert.notEqual(moveDestinationError("nested/name", 1), "");
+  assert.notEqual(moveDestinationError("новое имя", 2), "");
+  assert.equal(moveDestinationError("/tmp/existing", 2), "");
 });
 
 test("file.move shortcut preparation cancels without backend and falls back to cursor", async () => {

@@ -285,8 +285,8 @@ func (s *CommandService) ExecuteCommand(ctx context.Context, request CommandRequ
 		}
 		var destination string
 		if raw, ok := params["destination"]; !ok || json.Unmarshal(raw, &destination) != nil ||
-			!filepath.IsAbs(destination) || strings.ContainsRune(destination, 0) {
-			return &CommandError{"invalid_params", "Укажите абсолютный локальный путь назначения."}
+			strings.TrimSpace(destination) == "" || strings.ContainsRune(destination, 0) {
+			return &CommandError{"invalid_params", "Укажите путь назначения или новое имя."}
 		}
 		sourcePanel, _ := request.Context.sourceAndTarget()
 		if sourcePanel.DirectoryLocation == nil {
@@ -308,10 +308,25 @@ func (s *CommandService) ExecuteCommand(ctx context.Context, request CommandRequ
 		if len(sources) == 0 {
 			return &CommandError{"unavailable", "Не выбран файл или каталог для перемещения."}
 		}
+		if !filepath.IsAbs(destination) {
+			if len(sources) != 1 || destination == "." || destination == ".." || filepath.VolumeName(destination) != "" ||
+				strings.ContainsRune(destination, os.PathSeparator) || filepath.Base(destination) != destination {
+				return &CommandError{"invalid_params", "Для одного объекта укажите одно новое имя без пути; для нескольких — абсолютный путь существующего каталога."}
+			}
+			destination = filepath.Join(sourceDirectory, destination)
+		} else {
+			destination = filepath.Clean(destination)
+		}
 		if s.moves == nil {
 			return &CommandError{"unavailable", "Перемещение файлов недоступно."}
 		}
-		snapshot, err := OperationContextSnapshot(request.Context, request.Params)
+		normalizedParams, err := json.Marshal(struct {
+			Destination string `json:"destination"`
+		}{Destination: destination})
+		if err != nil {
+			return &CommandError{"invalid_params", "Не удалось зафиксировать путь назначения."}
+		}
+		snapshot, err := OperationContextSnapshot(request.Context, normalizedParams)
 		if err != nil {
 			return err
 		}

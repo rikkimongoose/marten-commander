@@ -55,18 +55,99 @@ func TestMoveRenameFilesDirectoriesUnicodeAndMultipleSelection(t *testing.T) {
 	}
 }
 
-func TestMoveSingleSourceCanBeRenamed(t *testing.T) {
+func TestMoveSingleSourceCanRenameFileAndNonEmptyDirectory(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		create func(string) error
+		check  func(*testing.T, string)
+	}{
+		{"file with Unicode", func(path string) error { return os.WriteFile(path, []byte("x"), 0o644) }, func(t *testing.T, path string) {
+			if content, err := os.ReadFile(path); err != nil || string(content) != "x" {
+				t.Fatalf("file: %q %v", content, err)
+			}
+		}},
+		{"non-empty directory", func(path string) error {
+			if err := os.MkdirAll(filepath.Join(path, "nested"), 0o755); err != nil {
+				return err
+			}
+			return os.WriteFile(filepath.Join(path, "nested", "inside.txt"), []byte("nested"), 0o644)
+		}, func(t *testing.T, path string) {
+			if content, err := os.ReadFile(filepath.Join(path, "nested", "inside.txt")); err != nil || string(content) != "nested" {
+				t.Fatalf("directory content: %q %v", content, err)
+			}
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			source := filepath.Join(root, "старое имя")
+			target := filepath.Join(root, "новое имя 🦊")
+			if err := test.create(source); err != nil {
+				t.Fatal(err)
+			}
+			manager, operation := startMove(t, localfs.LocalFileSystem{}, []string{source}, target)
+			defer manager.Close()
+			if result := waitCopyState(t, manager, operation.ID, operations.Completed, operations.Failed); result.State != operations.Completed {
+				t.Fatalf("rename: %#v", result.Error)
+			}
+			if _, err := os.Lstat(source); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("source remained: %v", err)
+			}
+			test.check(t, target)
+		})
+	}
+}
+
+func TestMoveSingleFileToNewPathInAnotherDirectory(t *testing.T) {
 	root := t.TempDir()
-	source := filepath.Join(root, "old")
-	target := filepath.Join(root, "новое имя")
-	_ = os.WriteFile(source, []byte("x"), 0o644)
+	sourceDirectory, targetDirectory := filepath.Join(root, "source"), filepath.Join(root, "target")
+	if err := os.Mkdir(sourceDirectory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(targetDirectory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(sourceDirectory, "report.txt")
+	target := filepath.Join(targetDirectory, "renamed.txt")
+	if err := os.WriteFile(source, []byte("report"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	manager, operation := startMove(t, localfs.LocalFileSystem{}, []string{source}, target)
 	defer manager.Close()
 	if result := waitCopyState(t, manager, operation.ID, operations.Completed, operations.Failed); result.State != operations.Completed {
-		t.Fatalf("rename: %#v", result.Error)
+		t.Fatalf("move and rename: %#v", result.Error)
 	}
-	if _, err := os.Stat(target); err != nil {
+	if content, err := os.ReadFile(target); err != nil || string(content) != "report" {
+		t.Fatalf("target: %q %v", content, err)
+	}
+	if _, err := os.Lstat(source); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("source remained: %v", err)
+	}
+}
+
+func TestMoveRenameCollisionWaitsForExplicitResolution(t *testing.T) {
+	root := t.TempDir()
+	source, target := filepath.Join(root, "old.txt"), filepath.Join(root, "new.txt")
+	if err := os.WriteFile(source, []byte("source"), 0o644); err != nil {
 		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte("existing"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	manager, operation := startMove(t, localfs.LocalFileSystem{}, []string{source}, target)
+	defer manager.Close()
+	conflict := waitCopyState(t, manager, operation.ID, operations.WaitingForUser)
+	if conflict.PendingConflict == nil || conflict.PendingConflict.Destination.Path != target {
+		t.Fatalf("rename conflict: %#v", conflict.PendingConflict)
+	}
+	resolveNext(t, manager, operation.ID, operations.Skip, false)
+	if result := waitCopyState(t, manager, operation.ID, operations.Completed, operations.Failed); result.State != operations.Completed {
+		t.Fatalf("skip: %#v", result.Error)
+	}
+	if content, _ := os.ReadFile(source); string(content) != "source" {
+		t.Fatalf("source changed: %q", content)
+	}
+	if content, _ := os.ReadFile(target); string(content) != "existing" {
+		t.Fatalf("destination overwritten without permission: %q", content)
 	}
 }
 

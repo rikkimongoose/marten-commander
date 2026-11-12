@@ -320,10 +320,35 @@ func TestMoveCommandUsesImmutableSelectionAndDestination(t *testing.T) {
 	}
 }
 
+func TestMoveCommandResolvesSinglePlainNameInSourceDirectory(t *testing.T) {
+	request := commandFixture(t)
+	request.Type = "file.move"
+	request.Context.Left.SelectedLocations = []string{}
+	request.Params = json.RawMessage(`{"destination":"новое имя 🦊"}`)
+	moves := &copyServiceStub{}
+	if err := NewCommandService(&fileServiceStub{}).withMoves(moves).ExecuteCommand(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	sourceDirectory := mustDecode(t, *request.Context.Left.DirectoryLocation)
+	want := filepath.Join(sourceDirectory, "новое имя 🦊")
+	if moves.destination != want {
+		t.Fatalf("destination = %q, want %q", moves.destination, want)
+	}
+	if moves.snapshot.DestinationDirectory == nil || *moves.snapshot.DestinationDirectory != encode(sourceDirectory) {
+		t.Fatalf("destination snapshot: %#v", moves.snapshot)
+	}
+	var parameters struct {
+		Destination string `json:"destination"`
+	}
+	if err := json.Unmarshal([]byte(moves.snapshot.ParametersJSON), &parameters); err != nil || parameters.Destination != want {
+		t.Fatalf("parameters = %#v, err=%v", parameters, err)
+	}
+}
+
 func TestMoveCommandRejectsParentAndInvalidMultipleTarget(t *testing.T) {
 	request := commandFixture(t)
 	request.Type = "file.move"
-	request.Params = json.RawMessage(`{"destination":"relative"}`)
+	request.Params = json.RawMessage(`{"destination":"nested/target"}`)
 	err := NewCommandService(&fileServiceStub{}).withMoves(&copyServiceStub{}).ExecuteCommand(context.Background(), request)
 	var commandErr *CommandError
 	if !errors.As(err, &commandErr) || commandErr.Code != "invalid_params" {
@@ -335,6 +360,17 @@ func TestMoveCommandRejectsParentAndInvalidMultipleTarget(t *testing.T) {
 	err = NewCommandService(&fileServiceStub{}).withMoves(&copyServiceStub{}).ExecuteCommand(context.Background(), request)
 	if !errors.As(err, &commandErr) || commandErr.Code != "invalid_context" {
 		t.Fatalf("parent: %#v", err)
+	}
+	request = commandFixture(t)
+	request.Type = "file.move"
+	request.Context.Left.SelectedLocations = []string{
+		encode(filepath.Join(mustDecode(t, *request.Context.Left.DirectoryLocation), "one")),
+		encode(filepath.Join(mustDecode(t, *request.Context.Left.DirectoryLocation), "two")),
+	}
+	request.Params = json.RawMessage(`{"destination":"new-name"}`)
+	err = NewCommandService(&fileServiceStub{}).withMoves(&copyServiceStub{}).ExecuteCommand(context.Background(), request)
+	if !errors.As(err, &commandErr) || commandErr.Code != "invalid_params" {
+		t.Fatalf("multiple relative target: %#v", err)
 	}
 }
 
