@@ -36,7 +36,7 @@ export default function App() {
   const [, setCommandContextVersion] = useState(0);
   const commandContextChanged = useCallback(() => setCommandContextVersion(version => version + 1), []);
   const [commands] = useState(() => {
-    const empty = () => ({ directoryLocation: null, selectedLocations: [], focusedLocation: null });
+    const empty = () => ({ directoryLocation: null, selectedLocations: [], focusedLocation: null, focusedKind: null });
     const dispatcher = new CommandDispatcher(() => ({
       activePanel: activeRef.current,
       left: left.current?.getContext() ?? empty(),

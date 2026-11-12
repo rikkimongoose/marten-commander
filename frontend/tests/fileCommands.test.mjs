@@ -37,6 +37,52 @@ test("file.open validates its concrete row parameter before the backend", async 
   await assert.rejects(dispatcher.dispatch("file.open", {}), error => error.code === "invalid_params");
 });
 
+test("file.edit uses only the focused regular file despite multiple selection", async () => {
+  const focused = location("/left/текущий файл с пробелами.txt");
+  const context = {
+    activePanel: "left",
+    left: {
+      directoryLocation: location("/left"),
+      selectedLocations: [location("/left/one.txt"), location("/left/two.txt")],
+      focusedLocation: focused,
+      focusedKind: "file",
+    },
+    right: { directoryLocation: location("/right"), selectedLocations: [], focusedLocation: null, focusedKind: null },
+  };
+  let received;
+  const dispatcher = new CommandDispatcher(() => context, () => "edit-1");
+  registerFileCommands(dispatcher, request => { received = request; });
+
+  assert.equal(dispatcher.availability("file.edit").enabled, true);
+  await dispatcher.dispatch("file.edit");
+  assert.equal(received.type, "file.edit");
+  assert.deepEqual(received.params, { location: focused });
+  assert.deepEqual(received.context.left.selectedLocations, context.left.selectedLocations);
+});
+
+test("file.edit is unavailable for directories, parent row and a missing cursor", async () => {
+  const context = {
+    activePanel: "left",
+    left: { directoryLocation: location("/left"), selectedLocations: [], focusedLocation: location("/left/dir"), focusedKind: "directory" },
+    right: { directoryLocation: location("/right"), selectedLocations: [], focusedLocation: null, focusedKind: null },
+  };
+  let backendCalls = 0;
+  const dispatcher = new CommandDispatcher(() => context);
+  registerFileCommands(dispatcher, () => { backendCalls++; });
+  for (const [focusedLocation, focusedKind] of [
+    [location("/left/dir"), "directory"],
+    [null, null],
+    [location("/left/link"), "symlink"],
+    [location("/left/device"), "other"],
+  ]) {
+    context.left.focusedLocation = focusedLocation;
+    context.left.focusedKind = focusedKind;
+    assert.equal(dispatcher.availability("file.edit").enabled, false);
+    await assert.rejects(dispatcher.dispatch("file.edit"), error => error.code === "unavailable");
+  }
+  assert.equal(backendCalls, 0);
+});
+
 test("mkdir name validation rejects empty, dot and path values but preserves spaces and Unicode", () => {
   for (const name of ["", "   ", ".", "..", "nested/child", "/absolute"]) {
     assert.notEqual(directoryNameError(name), "", name);

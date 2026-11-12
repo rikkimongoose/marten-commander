@@ -9,6 +9,7 @@ import (
 	"github.com/rikkimongoose/marten-commander/internal/desktop"
 	"github.com/rikkimongoose/marten-commander/internal/localfs"
 	"github.com/rikkimongoose/marten-commander/internal/operations"
+	"github.com/rikkimongoose/marten-commander/internal/settings"
 	"github.com/rikkimongoose/marten-commander/internal/volumes"
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
@@ -32,6 +33,8 @@ func main() {
 	filesystem := localfs.LocalFileSystem{}
 	directories := app.NewDirectoryService(filesystem, filesystem, initial)
 	files := app.NewFileService(filesystem, localfs.SystemFileLauncher{})
+	editorConfig, editorConfigError := settings.LoadEditorConfig()
+	editor := app.NewEditorService(filesystem, localfs.SystemEditorLauncher{}, editorConfig, editorConfigError)
 	operationManager := operations.NewManager()
 	copyService := app.NewCopyService(filesystem, operationManager)
 	moveService := app.NewMoveService(filesystem, operationManager)
@@ -40,7 +43,7 @@ func main() {
 		Name: "Marten Commander", Description: "Двухпанельный файловый менеджер",
 		Services: []application.Service{
 			application.NewService(desktop.NewDirectoryService(directories, initialIsHome)),
-			application.NewService(desktop.NewCommandServiceWithMove(files, copyService, moveService)),
+			application.NewService(desktop.NewCommandServiceWithOperations(files, editor, copyService, moveService)),
 			application.NewService(desktop.NewVolumeService(volumes.NewService())),
 			application.NewService(operationService),
 		},

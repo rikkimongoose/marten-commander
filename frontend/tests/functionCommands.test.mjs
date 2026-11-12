@@ -30,6 +30,17 @@ test("F7 button and keyboard paths invoke the same available mkdir command", () 
   assert.deepEqual(calls, ["file.mkdir", "file.mkdir"]);
 });
 
+test("F4 button and keyboard paths invoke the same available edit command", () => {
+  const calls = [];
+  const availability = () => ({ enabled: true });
+  const dispatch = id => calls.push(id);
+  invokeFunctionCommand("file.edit", availability, dispatch);
+  const shortcut = functionCommandForKey(key("F4"), false);
+  assert.equal(shortcut, "file.edit");
+  invokeFunctionCommand(shortcut, availability, dispatch);
+  assert.deepEqual(calls, ["file.edit", "file.edit"]);
+});
+
 test("F5 button and keyboard paths invoke the same copy command", () => {
   const calls = [];
   const availability = () => ({ enabled: true });

@@ -20,7 +20,7 @@ export function createCommandBackend(binding?: ExecuteBinding) {
       const cause = error instanceof Error && "cause" in error ? error.cause : undefined;
       if (cause && typeof cause === "object" && "code" in cause && "message" in cause && typeof cause.message === "string" &&
         (cause.code === "unknown_command" || cause.code === "invalid_request" || cause.code === "invalid_context" || cause.code === "invalid_params" ||
-          cause.code === "unavailable" || cause.code === "open_failed" || cause.code === "mkdir_failed" || cause.code === "copy_failed" || cause.code === "move_failed")) {
+          cause.code === "unavailable" || cause.code === "open_failed" || cause.code === "edit_failed" || cause.code === "mkdir_failed" || cause.code === "copy_failed" || cause.code === "move_failed")) {
         throw new CommandError(cause.code, cause.message, error);
       }
       throw error;

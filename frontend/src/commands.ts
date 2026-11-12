@@ -9,6 +9,7 @@ export interface PanelContext {
   readonly directoryLocation: string | null;
   readonly selectedLocations: readonly string[];
   readonly focusedLocation: string | null;
+  readonly focusedKind?: "file" | "directory" | "symlink" | "other" | null;
 }
 
 export interface CommandContext {
@@ -27,7 +28,7 @@ export interface CommandRequest {
 }
 
 export type CommandErrorCode = "unknown_command" | "duplicate_command" | "unavailable" |
-  "invalid_context" | "invalid_request" | "invalid_params" | "open_failed" | "mkdir_failed" | "copy_failed" | "move_failed" | "handler_failed";
+  "invalid_context" | "invalid_request" | "invalid_params" | "open_failed" | "edit_failed" | "mkdir_failed" | "copy_failed" | "move_failed" | "handler_failed";
 
 export class CommandError extends Error {
   readonly code: CommandErrorCode;
@@ -62,6 +63,8 @@ export function snapshotContext(context: CommandContext): CommandContext {
   const panel = (value: PanelContext): PanelContext => {
     if (!value || (value.directoryLocation !== null && typeof value.directoryLocation !== "string") ||
       (value.focusedLocation !== null && typeof value.focusedLocation !== "string") ||
+      (value.focusedKind !== undefined && value.focusedKind !== null &&
+        !["file", "directory", "symlink", "other"].includes(value.focusedKind)) ||
       !Array.isArray(value.selectedLocations) || value.selectedLocations.some(id => typeof id !== "string")) {
       throw new CommandError("invalid_context", "Некорректный контекст панели.");
     }
@@ -69,6 +72,7 @@ export function snapshotContext(context: CommandContext): CommandContext {
       directoryLocation: value.directoryLocation,
       selectedLocations: Object.freeze([...value.selectedLocations]),
       focusedLocation: value.focusedLocation,
+      ...(value.focusedKind !== undefined ? { focusedKind: value.focusedKind } : {}),
     });
   };
   if (!context || (context.activePanel !== "left" && context.activePanel !== "right")) {

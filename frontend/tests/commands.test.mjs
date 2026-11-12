@@ -7,8 +7,8 @@ const location = value => Buffer.from(value).toString("base64url");
 function context(activePanel = "left") {
   return {
     activePanel,
-    left: { directoryLocation: location("/left"), selectedLocations: [location("/left/selected")], focusedLocation: location("/left/focused") },
-    right: { directoryLocation: location("/right"), selectedLocations: [], focusedLocation: null },
+    left: { directoryLocation: location("/left"), selectedLocations: [location("/left/selected")], focusedLocation: location("/left/focused"), focusedKind: "file" },
+    right: { directoryLocation: location("/right"), selectedLocations: [], focusedLocation: null, focusedKind: null },
   };
 }
 const available = () => ({ enabled: true });
@@ -35,6 +35,7 @@ test("snapshot copies and freezes both panels and selections, without retaining 
   original.left.directoryLocation = location("/other");
   original.left.selectedLocations.push(location("/other/new"));
   original.left.focusedLocation = null;
+  original.left.focusedKind = null;
   original.right.selectedLocations.push(location("/right/new"));
   assert.equal(JSON.stringify(snapshot), saved);
   assert.equal("grid" in snapshot.left, false);

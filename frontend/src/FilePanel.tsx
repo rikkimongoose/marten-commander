@@ -33,6 +33,14 @@ const defaultColumn: ColDef<PanelRow> = { sortable: true, resizable: true, cellD
 const rowHeight = 28;
 type View = { current?: string; index: number; top?: string; topIndex: number; focus: boolean; preferred?: string };
 
+function focusedKind(row?: PanelRow): PanelContext["focusedKind"] {
+  if (!fileLocation(row)) return null;
+  switch (row?.kind) {
+    case "file": case "directory": case "symlink": case "other": return row.kind;
+    default: return "other";
+  }
+}
+
 export interface FilePanelHandle {
   getContext(): PanelContext;
   getDisplayPath(): string;
@@ -114,6 +122,7 @@ export const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(function Fi
       directoryLocation: snapshot.current?.location ?? null,
       selectedLocations: api.current?.getSelectedNodes().flatMap(node => fileLocation(node.data) ? [node.data!.id] : []) ?? [],
       focusedLocation: current.current ? fileLocation(api.current?.getRowNode(current.current)?.data) : null,
+      focusedKind: current.current ? focusedKind(api.current?.getRowNode(current.current)?.data) : null,
     }),
     selectAll: () => {
       if (!api.current || api.current.isDestroyed()) throw new CommandError("unavailable", "Таблица недоступна.");

@@ -20,6 +20,7 @@ type PanelContext struct {
 	DirectoryLocation *string  `json:"directoryLocation"`
 	SelectedLocations []string `json:"selectedLocations"`
 	FocusedLocation   *string  `json:"focusedLocation"`
+	FocusedKind       *string  `json:"focusedKind,omitempty"`
 }
 
 // effectiveSelection keeps the transport distinction between explicit row
@@ -76,12 +77,17 @@ type moveCommandService interface {
 	Start(context.Context, operations.ContextSnapshot, []string, string) (operations.Operation, error)
 }
 
+type editorCommandService interface {
+	Edit(context.Context, string) error
+}
+
 // CommandService is the Wails transport boundary. It decodes opaque native
 // locations and delegates supported use cases to the application layer.
 type CommandService struct {
 	files  fileCommandService
 	copies copyCommandService
 	moves  moveCommandService
+	editor editorCommandService
 }
 
 func NewCommandService(files fileCommandService, copies ...copyCommandService) *CommandService {
@@ -99,6 +105,12 @@ func (s *CommandService) withMoves(moves moveCommandService) *CommandService {
 
 func NewCommandServiceWithMove(files fileCommandService, copies copyCommandService, moves moveCommandService) *CommandService {
 	return NewCommandService(files, copies).withMoves(moves)
+}
+
+func NewCommandServiceWithOperations(files fileCommandService, editor editorCommandService, copies copyCommandService, moves moveCommandService) *CommandService {
+	service := NewCommandServiceWithMove(files, copies, moves)
+	service.editor = editor
+	return service
 }
 
 func (s *CommandService) ExecuteCommand(ctx context.Context, request CommandRequest) error {
@@ -135,6 +147,43 @@ func (s *CommandService) ExecuteCommand(ctx context.Context, request CommandRequ
 		}
 		if err := s.files.Open(ctx, path); err != nil {
 			return &CommandError{"open_failed", fmt.Sprintf("Не удалось открыть файл %q: %v", display(path), err)}
+		}
+		return nil
+	}
+	if request.Type == "file.edit" {
+		if len(params) != 1 {
+			return &CommandError{"invalid_params", "Команда редактирования требует только адрес файла."}
+		}
+		var location string
+		if raw, ok := params["location"]; !ok || json.Unmarshal(raw, &location) != nil || location == "" {
+			return &CommandError{"invalid_params", "Не указан корректный адрес файла для редактирования."}
+		}
+		path, ok := decodeLocation(location)
+		if !ok {
+			return &CommandError{"invalid_params", "Некорректный адрес файла для редактирования."}
+		}
+		source, _ := request.Context.sourceAndTarget()
+		if source.DirectoryLocation == nil || source.FocusedLocation == nil || *source.FocusedLocation != location {
+			return &CommandError{"invalid_context", "Редактировать можно только файл под курсором активной панели."}
+		}
+		directory, ok := decodeLocation(*source.DirectoryLocation)
+		if !ok || filepath.Dir(path) != filepath.Clean(directory) {
+			return &CommandError{"invalid_context", "Файл под курсором не принадлежит открытому каталогу."}
+		}
+		if s.editor == nil {
+			return &CommandError{"unavailable", "Внешний текстовый редактор недоступен."}
+		}
+		if err := s.editor.Edit(ctx, path); err != nil {
+			switch {
+			case errors.Is(err, fs.ErrNotExist):
+				return &CommandError{"edit_failed", "Файл исчез перед запуском редактора."}
+			case errors.Is(err, fs.ErrPermission):
+				return &CommandError{"edit_failed", "Недостаточно прав для чтения файла или запуска редактора."}
+			case errors.Is(err, fs.ErrInvalid):
+				return &CommandError{"edit_failed", "Под курсором находится объект, который нельзя редактировать как обычный файл."}
+			default:
+				return &CommandError{"edit_failed", fmt.Sprintf("Не удалось запустить редактор для файла %q: %v", display(path), err)}
+			}
 		}
 		return nil
 	}
@@ -322,6 +371,11 @@ func validateCommandContext(c CommandContext) error {
 		}
 		if panel.FocusedLocation != nil {
 			if _, ok := decodeLocation(*panel.FocusedLocation); !ok {
+				return invalid()
+			}
+		}
+		if panel.FocusedKind != nil {
+			if panel.FocusedLocation == nil || (*panel.FocusedKind != "file" && *panel.FocusedKind != "directory" && *panel.FocusedKind != "symlink" && *panel.FocusedKind != "other") {
 				return invalid()
 			}
 		}

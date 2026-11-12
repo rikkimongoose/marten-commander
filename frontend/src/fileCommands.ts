@@ -62,6 +62,21 @@ export function registerFileCommands(
       return executeBackend(request);
     },
   });
+  dispatcher.register("file.edit", {
+    available: context => {
+      const source = sourceAndTarget(context).source;
+      return source.focusedLocation !== null && source.focusedKind === "file"
+        ? { enabled: true } : { enabled: false, reason: "Под курсором нет обычного файла." };
+    },
+    prepare: context => {
+      const source = sourceAndTarget(context).source;
+      if (source.focusedLocation === null || source.focusedKind !== "file") {
+        throw new CommandError("unavailable", "Под курсором нет обычного файла.");
+      }
+      return { location: source.focusedLocation };
+    },
+    execute: request => executeBackend(request),
+  });
   if (mkdir) dispatcher.register("file.mkdir", {
     available: context => sourceAndTarget(context).source.directoryLocation === null
       ? { enabled: false, reason: "Каталог ещё не открыт." } : { enabled: true },

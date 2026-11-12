@@ -80,6 +80,7 @@ export interface PanelContext {
     "directoryLocation": string | null;
     "selectedLocations": string[] | null;
     "focusedLocation": string | null;
+    "focusedKind"?: string | null;
 }
 
 export interface Volume {

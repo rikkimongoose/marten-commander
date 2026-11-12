@@ -19,8 +19,8 @@ func commandFixture(t *testing.T) CommandRequest {
 	return CommandRequest{
 		ID: "call-1", Type: "unsupported.type", Params: json.RawMessage(`{}`),
 		Context: CommandContext{ActivePanel: "left",
-			Left:  PanelContext{&left, []string{selected}, &focused},
-			Right: PanelContext{&right, []string{}, nil}},
+			Left:  PanelContext{DirectoryLocation: &left, SelectedLocations: []string{selected}, FocusedLocation: &focused},
+			Right: PanelContext{DirectoryLocation: &right, SelectedLocations: []string{}}},
 	}
 }
 
@@ -37,6 +37,13 @@ type copyServiceStub struct {
 	destination string
 	err         error
 }
+
+type editorServiceStub struct {
+	path string
+	err  error
+}
+
+func (s *editorServiceStub) Edit(_ context.Context, path string) error { s.path = path; return s.err }
 
 func (s *copyServiceStub) Start(_ context.Context, snapshot operations.ContextSnapshot, sources []string, destination string) (operations.Operation, error) {
 	s.snapshot, s.sources, s.destination = snapshot, append([]string(nil), sources...), destination
@@ -119,6 +126,55 @@ func TestFileOpenCommandRejectsBadParametersAndReportsServiceErrors(t *testing.T
 		t.Run(test.name, func(t *testing.T) {
 			request.Params = json.RawMessage(test.params)
 			err := NewCommandService(test.files).ExecuteCommand(context.Background(), request)
+			var commandErr *CommandError
+			if !errors.As(err, &commandErr) || commandErr.Code != test.code || commandErr.Message == "" {
+				t.Fatalf("wanted %s, got %#v", test.code, err)
+			}
+		})
+	}
+}
+
+func TestFileEditCommandUsesOnlyFocusedFileDespiteSelection(t *testing.T) {
+	request := commandFixture(t)
+	request.Type = "file.edit"
+	request.Params = json.RawMessage(`{"location":"` + *request.Context.Left.FocusedLocation + `"}`)
+	editor := &editorServiceStub{}
+	if err := NewCommandServiceWithOperations(&fileServiceStub{}, editor, nil, nil).ExecuteCommand(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	want, _ := decodeLocation(*request.Context.Left.FocusedLocation)
+	if editor.path != want {
+		t.Fatalf("edited %q, want cursor %q", editor.path, want)
+	}
+	selected, _ := decodeLocation(request.Context.Left.SelectedLocations[0])
+	if editor.path == selected {
+		t.Fatal("multiple selection replaced cursor operand")
+	}
+}
+
+func TestFileEditCommandValidatesCursorAndClassifiesErrors(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		edit    func(*CommandRequest)
+		service editorCommandService
+		code    string
+	}{
+		{"missing params", func(r *CommandRequest) { r.Params = json.RawMessage(`{}`) }, &editorServiceStub{}, "invalid_params"},
+		{"selection instead of cursor", func(r *CommandRequest) {
+			r.Params = json.RawMessage(`{"location":"` + r.Context.Left.SelectedLocations[0] + `"}`)
+		}, &editorServiceStub{}, "invalid_context"},
+		{"unavailable", func(*CommandRequest) {}, nil, "unavailable"},
+		{"missing file", func(*CommandRequest) {}, &editorServiceStub{err: fs.ErrNotExist}, "edit_failed"},
+		{"permission", func(*CommandRequest) {}, &editorServiceStub{err: fs.ErrPermission}, "edit_failed"},
+		{"directory", func(*CommandRequest) {}, &editorServiceStub{err: fs.ErrInvalid}, "edit_failed"},
+		{"launcher", func(*CommandRequest) {}, &editorServiceStub{err: errors.New("editor missing")}, "edit_failed"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := commandFixture(t)
+			request.Type = "file.edit"
+			request.Params = json.RawMessage(`{"location":"` + *request.Context.Left.FocusedLocation + `"}`)
+			test.edit(&request)
+			err := NewCommandServiceWithOperations(&fileServiceStub{}, test.service, nil, nil).ExecuteCommand(context.Background(), request)
 			var commandErr *CommandError
 			if !errors.As(err, &commandErr) || commandErr.Code != test.code || commandErr.Message == "" {
 				t.Fatalf("wanted %s, got %#v", test.code, err)
