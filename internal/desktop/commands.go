@@ -81,13 +81,18 @@ type editorCommandService interface {
 	Edit(context.Context, string) error
 }
 
+type terminalCommandService interface {
+	Run(context.Context, string, string) error
+}
+
 // CommandService is the Wails transport boundary. It decodes opaque native
 // locations and delegates supported use cases to the application layer.
 type CommandService struct {
-	files  fileCommandService
-	copies copyCommandService
-	moves  moveCommandService
-	editor editorCommandService
+	files    fileCommandService
+	copies   copyCommandService
+	moves    moveCommandService
+	editor   editorCommandService
+	terminal terminalCommandService
 }
 
 func NewCommandService(files fileCommandService, copies ...copyCommandService) *CommandService {
@@ -107,8 +112,11 @@ func NewCommandServiceWithMove(files fileCommandService, copies copyCommandServi
 	return NewCommandService(files, copies).withMoves(moves)
 }
 
-func NewCommandServiceWithOperations(files fileCommandService, editor editorCommandService, copies copyCommandService, moves moveCommandService) *CommandService {
+func NewCommandServiceWithOperations(files fileCommandService, editor editorCommandService, copies copyCommandService, moves moveCommandService, terminals ...terminalCommandService) *CommandService {
 	service := NewCommandServiceWithMove(files, copies, moves)
+	if len(terminals) > 0 {
+		service.terminal = terminals[0]
+	}
 	service.editor = editor
 	return service
 }
@@ -120,6 +128,14 @@ func (s *CommandService) ExecuteCommand(ctx context.Context, request CommandRequ
 	if strings.TrimSpace(request.ID) == "" || strings.TrimSpace(request.Type) == "" {
 		return &CommandError{"invalid_request", "Не указаны идентификатор вызова или тип команды."}
 	}
+	if request.Type == "terminal.run" {
+		source, _ := request.Context.sourceAndTarget()
+		if source.DirectoryLocation != nil {
+			if _, ok := decodeLocation(*source.DirectoryLocation); !ok {
+				return &CommandError{"invalid_context", "Терминал доступен только для локальной панели; SFTP не поддерживается."}
+			}
+		}
+	}
 	if err := validateCommandContext(request.Context); err != nil {
 		return err
 	}
@@ -129,6 +145,30 @@ func (s *CommandService) ExecuteCommand(ctx context.Context, request CommandRequ
 	var params map[string]json.RawMessage
 	if err := json.Unmarshal(request.Params, &params); err != nil || params == nil {
 		return &CommandError{"invalid_params", "Параметры команды должны быть JSON-объектом."}
+	}
+	if request.Type == "terminal.run" {
+		var command string
+		if len(params) != 1 || string(params["command"]) == "null" || json.Unmarshal(params["command"], &command) != nil || strings.ContainsRune(command, 0) {
+			return &CommandError{"invalid_params", "Требуется текст команды."}
+		}
+		if strings.TrimSpace(command) == "" {
+			return nil
+		}
+		source, _ := request.Context.sourceAndTarget()
+		if source.DirectoryLocation == nil {
+			return &CommandError{"unavailable", "Откройте локальный каталог для запуска команды."}
+		}
+		directory, ok := decodeLocation(*source.DirectoryLocation)
+		if !ok {
+			return &CommandError{"invalid_context", "Терминал доступен только для локальной панели; SFTP не поддерживается."}
+		}
+		if s.terminal == nil {
+			return &CommandError{"unavailable", "Внешний терминал недоступен."}
+		}
+		if err := s.terminal.Run(ctx, command, directory); err != nil {
+			return &CommandError{"terminal_failed", fmt.Sprintf("Не удалось запустить терминал: %v", err)}
+		}
+		return nil
 	}
 	if request.Type == "file.open" {
 		if len(params) != 1 {

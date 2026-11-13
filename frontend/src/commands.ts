@@ -1,7 +1,7 @@
 export type PanelId = "left" | "right";
 export type CommandId = "panel.selectAll" | "panel.goToLocation" | "panel.openEntry" | "panel.goToParent" | "panel.switch" |
   "panel.goToPath" | "panel.goHome" | "file.open" | "file.view" | "file.edit" | "file.copy" | "file.move" |
-  "file.mkdir" | "file.delete";
+  "file.mkdir" | "file.delete" | "terminal.run";
 
 // Locations are base64url-encoded absolute native paths, as in Directory/Entry
 // DTOs. Display strings cannot address files with escaped or non-UTF-8 names.
@@ -28,7 +28,7 @@ export interface CommandRequest {
 }
 
 export type CommandErrorCode = "unknown_command" | "duplicate_command" | "unavailable" |
-  "invalid_context" | "invalid_request" | "invalid_params" | "open_failed" | "edit_failed" | "mkdir_failed" | "copy_failed" | "move_failed" | "handler_failed";
+  "invalid_context" | "invalid_request" | "invalid_params" | "open_failed" | "edit_failed" | "mkdir_failed" | "copy_failed" | "move_failed" | "handler_failed" | "terminal_failed";
 
 export class CommandError extends Error {
   readonly code: CommandErrorCode;

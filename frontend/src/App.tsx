@@ -1,3 +1,4 @@
+import { registerTerminalCommand } from "./terminalCommand";
 import { useCallback, useRef, useState } from "react";
 import { Alert, Box, CssBaseline } from "@mui/material";
 import { AgGridProvider } from "ag-grid-react";
@@ -68,6 +69,7 @@ export default function App() {
     });
     registerPathCommand(dispatcher, (id, path, baseLocation) => panel(id).navigatePath(path, baseLocation));
     registerHomeCommand(dispatcher, GetHomeDirectory, (id, location) => panel(id).navigate(location, undefined, true));
+    registerTerminalCommand(dispatcher);
     registerFileCommands(dispatcher, undefined, {
       prompt: { open: openMkdirDialog, retry: retryMkdirDialog, complete: closeMkdirDialog },
       succeeded: (request, name) => {

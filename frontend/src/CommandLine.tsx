@@ -26,7 +26,7 @@ export function CommandLine({ path, dispatch, report, returnToPanel }: CommandLi
     if (parsed.kind === "empty") return;
     if (parsed.kind === "home") dispatch("panel.goHome");
     else if (parsed.kind === "navigate") dispatch("panel.goToPath", { path: parsed.path });
-    else if (parsed.kind === "external") report("Выполнение внешних команд пока не поддерживается.");
+    else if (parsed.kind === "external") dispatch("terminal.run", { command: parsed.command });
     else report(parsed.message);
     setValue("");
   }
