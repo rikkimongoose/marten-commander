@@ -93,6 +93,7 @@ type CommandService struct {
 	moves    moveCommandService
 	editor   editorCommandService
 	terminal terminalCommandService
+	trash    trashCommandService
 }
 
 func NewCommandService(files fileCommandService, copies ...copyCommandService) *CommandService {
@@ -121,6 +122,12 @@ func NewCommandServiceWithOperations(files fileCommandService, editor editorComm
 	return service
 }
 
+func NewCommandServiceWithTrash(files fileCommandService, editor editorCommandService, copies copyCommandService, moves moveCommandService, terminal terminalCommandService, trash trashCommandService) *CommandService {
+	service := NewCommandServiceWithOperations(files, editor, copies, moves, terminal)
+	service.trash = trash
+	return service
+}
+
 func (s *CommandService) ExecuteCommand(ctx context.Context, request CommandRequest) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -145,6 +152,9 @@ func (s *CommandService) ExecuteCommand(ctx context.Context, request CommandRequ
 	var params map[string]json.RawMessage
 	if err := json.Unmarshal(request.Params, &params); err != nil || params == nil {
 		return &CommandError{"invalid_params", "Параметры команды должны быть JSON-объектом."}
+	}
+	if request.Type == "file.trash" {
+		return s.executeTrash(ctx, request, params)
 	}
 	if request.Type == "terminal.run" {
 		var command string

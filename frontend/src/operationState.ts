@@ -35,6 +35,7 @@ export interface ConflictResolutionView {
 }
 
 export interface OperationView {
+  readonly cancellationRequested?: boolean;
   readonly operationId: string;
   readonly type: string;
   readonly state: string;

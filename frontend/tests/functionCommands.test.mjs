@@ -15,7 +15,7 @@ test("function bar has the approved F3-F8 commands in order", () => {
     { shortcut: "F5", label: "Копировать", id: "file.copy" },
     { shortcut: "F6", label: "Переместить", id: "file.move" },
     { shortcut: "F7", label: "Каталог", id: "file.mkdir" },
-    { shortcut: "F8", label: "Удалить", id: "file.delete" },
+    { shortcut: "F8", label: "Удалить", id: "file.trash" },
   ]);
 });
 

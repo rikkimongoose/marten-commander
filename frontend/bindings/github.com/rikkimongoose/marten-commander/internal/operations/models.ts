@@ -83,6 +83,7 @@ export interface Event {
 }
 
 export interface Operation {
+    "cancellationRequested"?: boolean;
     "operationId": string;
     "type": string;
     "context": ContextSnapshot;

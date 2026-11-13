@@ -11,7 +11,7 @@ import { ConflictDialog } from "./ConflictDialog.tsx";
 
 const labels: Record<string, string> = {
   copy: "Копирование", move: "Перемещение", delete: "Удаление",
-  "file.copy": "Копирование", "file.move": "Перемещение", "file.delete": "Удаление",
+  "file.copy": "Копирование", "file.move": "Перемещение", "file.trash": "Перемещение в корзину",
   queued: "В очереди", running: "Выполняется", "waiting-for-user": "Ожидает решения",
   completed: "Завершена", failed: "Ошибка", cancelled: "Отменена",
 };
@@ -136,19 +136,22 @@ export function OperationsCenter({ onOperationFinished }: { onOperationFinished?
           return <Box key={operation.operationId} sx={{ py: 1 }}>
             <Box sx={{ display: "flex", alignItems: "baseline", gap: 1 }}>
               <Typography sx={{ flex: 1, fontWeight: 600 }}>{labels[operation.type] ?? operation.type}</Typography>
-              <Typography variant="body2" color="text.secondary">{labels[operation.state] ?? operation.state}</Typography>
+              <Typography variant="body2" color="text.secondary">{operation.cancellationRequested && operationIsCancellable(operation.state) ? "Отмена после текущего объекта…" : labels[operation.state] ?? operation.state}</Typography>
             </Box>
             {operation.progress.currentFile && <Typography variant="body2" title={operation.progress.currentFile} noWrap>{operation.progress.currentFile}</Typography>}
             <Typography variant="caption" color="text.secondary" component="div">
-              Файлы: {operation.progress.processedFiles}{operation.progress.totalFiles === null ? " / ?" : ` / ${operation.progress.totalFiles}`}
-              {" · "}Данные: {formatBytes(operation.progress.processedBytes)}{operation.progress.totalBytes === null ? " / ?" : ` / ${formatBytes(operation.progress.totalBytes)}`}
+              {operation.type === "file.trash" ? "В корзине: " : "Файлы: "}{operation.progress.processedFiles}{operation.progress.totalFiles === null ? " / ?" : ` / ${operation.progress.totalFiles}`}
+              {operation.type !== "file.trash" && <> · Данные: {formatBytes(operation.progress.processedBytes)}{operation.progress.totalBytes === null ? " / ?" : ` / ${formatBytes(operation.progress.totalBytes)}`}</>}
             </Typography>
             <LinearProgress variant={progress.determinate ? "determinate" : "indeterminate"} value={progress.value} sx={{ my: 0.75 }} />
+            {operation.type === "file.trash" && ["failed", "cancelled"].includes(operation.state) &&
+              <Alert severity="warning">В корзине: {operation.progress.processedFiles} из {operation.progress.totalFiles ?? "?"}.
+                Уже перемещённые объекты остаются в корзине; остальные не обрабатываются.</Alert>}
             {operation.error && <Alert severity="error" sx={{ my: 0.75 }}>{operation.error.message}</Alert>}
             {operation.pendingConflict && <Button size="small" color="warning"
               onClick={() => openConflict(operation.pendingConflict!.conflictId)}>Разрешить конфликт</Button>}
-            {operationIsCancellable(operation.state) && <Button size="small" onClick={() => cancel(operation.operationId)} disabled={busy}>
-              {busy ? "Отмена…" : "Отмена"}
+            {operationIsCancellable(operation.state) && <Button size="small" onClick={() => cancel(operation.operationId)} disabled={busy || operation.cancellationRequested}>
+              {busy || operation.cancellationRequested ? "Отмена…" : "Отмена"}
             </Button>}
           </Box>;
         })}

@@ -1,3 +1,5 @@
+import { prepareTrash, registerTrashCommand, type TrashPreview } from "./trashCommand";
+import { TrashDialog } from "./TrashDialog";
 import { registerTerminalCommand } from "./terminalCommand";
 import { useCallback, useRef, useState } from "react";
 import { Alert, Box, CssBaseline } from "@mui/material";
@@ -34,6 +36,8 @@ export default function App() {
   const copyResolve = useRef<((result: CopyPromptResult) => void)>();
   const [moveDialog, setMoveDialog] = useState<CopyDialogState>({ open: false, sources: [], destination: "", busy: false, error: "" });
   const moveResolve = useRef<((result: MovePromptResult) => void)>();
+  const [trashPreview, setTrashPreview] = useState<TrashPreview | null>(null);
+  const trashResolve = useRef<((confirmed: boolean) => void)>();
   const [, setCommandContextVersion] = useState(0);
   const commandContextChanged = useCallback(() => setCommandContextVersion(version => version + 1), []);
   const [commands] = useState(() => {
@@ -70,6 +74,10 @@ export default function App() {
     registerPathCommand(dispatcher, (id, path, baseLocation) => panel(id).navigatePath(path, baseLocation));
     registerHomeCommand(dispatcher, GetHomeDirectory, (id, location) => panel(id).navigate(location, undefined, true));
     registerTerminalCommand(dispatcher);
+    registerTrashCommand(dispatcher, {
+      preview: prepareTrash,
+      confirm: preview => { setTrashPreview(preview); return new Promise(resolve => { trashResolve.current = resolve; }); },
+    });
     registerFileCommands(dispatcher, undefined, {
       prompt: { open: openMkdirDialog, retry: retryMkdirDialog, complete: closeMkdirDialog },
       succeeded: (request, name) => {
@@ -83,6 +91,13 @@ export default function App() {
     });
     return dispatcher;
   });
+
+  function finishTrash(confirmed: boolean) {
+    const resolve = trashResolve.current;
+    trashResolve.current = undefined;
+    setTrashPreview(null);
+    resolve?.(confirmed);
+  }
 
   function activate(id: PanelId) {
     // A button click may follow activation before React commits a new render.
@@ -218,6 +233,7 @@ export default function App() {
           <OperationsCenter onOperationFinished={refreshOperationPanels} />
         </Box>
         <FunctionBar availability={id => commands.availability(id)} dispatch={dispatch} />
+        <TrashDialog preview={trashPreview} confirm={() => finishTrash(true)} cancel={() => finishTrash(false)} closed={focusActivePanel} />
         <MkdirDialog {...mkdirDialog} submit={submitMkdir} cancel={cancelMkdir} closed={focusActivePanel} />
         <CopyDialog open={copyDialog.open} sources={copyDialog.sources} initialDestination={copyDialog.destination}
           busy={copyDialog.busy} error={copyDialog.error} submit={submitCopy} cancel={cancelCopy} closed={focusActivePanel} />

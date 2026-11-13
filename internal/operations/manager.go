@@ -56,16 +56,17 @@ type OperationError struct {
 }
 
 type Operation struct {
-	ID              string           `json:"operationId"`
-	Type            string           `json:"type"`
-	Context         ContextSnapshot  `json:"context"`
-	CreatedAt       time.Time        `json:"createdAt"`
-	FinishedAt      *time.Time       `json:"finishedAt"`
-	State           State            `json:"state"`
-	Progress        Progress         `json:"progress"`
-	Error           *OperationError  `json:"error"`
-	PendingConflict *ConflictRequest `json:"pendingConflict"`
-	UpdateVersion   uint64           `json:"updateVersion"`
+	CancellationRequested bool             `json:"cancellationRequested,omitempty"`
+	ID                    string           `json:"operationId"`
+	Type                  string           `json:"type"`
+	Context               ContextSnapshot  `json:"context"`
+	CreatedAt             time.Time        `json:"createdAt"`
+	FinishedAt            *time.Time       `json:"finishedAt"`
+	State                 State            `json:"state"`
+	Progress              Progress         `json:"progress"`
+	Error                 *OperationError  `json:"error"`
+	PendingConflict       *ConflictRequest `json:"pendingConflict"`
+	UpdateVersion         uint64           `json:"updateVersion"`
 }
 
 type Event struct {
@@ -101,6 +102,12 @@ type AtomicReporter interface {
 	Atomic(func() (Progress, error), bool) error
 }
 
+// ItemReporter accounts for a potentially slow OS mutation without holding the
+// manager lock. Cancellation stops subsequent items and waits for this outcome.
+type ItemReporter interface {
+	Item(func() (Progress, error), bool) error
+}
+
 // RunError lets a runner return a stable machine-readable failure code.
 type RunError struct {
 	Code    string
@@ -121,6 +128,7 @@ func (e *RunError) Error() string {
 func (e *RunError) Unwrap() error { return e.Cause }
 
 type record struct {
+	inFlight  bool
 	operation Operation
 	cancel    context.CancelFunc
 	pending   *pendingConflict
@@ -269,6 +277,17 @@ func (m *Manager) Cancel(id string) (Operation, error) {
 		return copy, nil
 	}
 	cancel := rec.cancel
+	if rec.inFlight {
+		rec.operation.CancellationRequested = true
+		rec.operation.UpdateVersion++
+		copy := cloneOperation(rec.operation)
+		m.mu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
+		m.enqueue(copy)
+		return copy, nil
+	}
 	if err := m.transitionLocked(rec, Cancelled); err != nil {
 		m.mu.Unlock()
 		return Operation{}, err
@@ -492,6 +511,52 @@ func (r reporter) Atomic(action func() (Progress, error), final bool) error {
 	r.manager.mu.Unlock()
 	r.manager.enqueue(copy)
 	return nil
+}
+
+// Item commits the observable result even when cancellation arrived while the
+// OS was moving an item. Other operations and List/Cancel never wait on GIO.
+func (r reporter) Item(action func() (Progress, error), final bool) error {
+	if action == nil {
+		return errors.New("nil item action")
+	}
+	m := r.manager
+	m.mu.Lock()
+	rec, ok := m.operations[r.id]
+	if !ok {
+		m.mu.Unlock()
+		return ErrNotFound
+	}
+	if rec.operation.State != Running || rec.inFlight {
+		m.mu.Unlock()
+		return ErrInvalidTransition
+	}
+	if err := r.ctx.Err(); err != nil {
+		m.mu.Unlock()
+		return err
+	}
+	rec.inFlight = true
+	m.mu.Unlock()
+	progress, err := action()
+	m.mu.Lock()
+	rec.inFlight = false
+	rec.operation.Progress = cloneProgress(progress)
+	rec.operation.UpdateVersion++
+	if err != nil {
+		rec.operation.Error = failure(err)
+	}
+	switch {
+	case err == nil && final:
+		rec.operation.Progress.CurrentFile = ""
+		_ = m.transitionLocked(rec, Completed)
+	case rec.operation.CancellationRequested || r.ctx.Err() != nil:
+		_ = m.transitionLocked(rec, Cancelled)
+	case err != nil:
+		_ = m.transitionLocked(rec, Failed)
+	}
+	copy := cloneOperation(rec.operation)
+	m.mu.Unlock()
+	m.enqueue(copy)
+	return err
 }
 
 func (r reporter) WaitingForUser() error { return r.transition(WaitingForUser) }

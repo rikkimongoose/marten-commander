@@ -83,6 +83,18 @@ export interface PanelContext {
     "focusedKind"?: string | null;
 }
 
+export interface TrashEntry {
+    "location": string;
+    "name": string;
+    "kind": string;
+    "revision": string;
+}
+
+export interface TrashPreview {
+    "directory": string;
+    "entries": TrashEntry[] | null;
+}
+
 export interface Volume {
     "id": string;
     "name": string;

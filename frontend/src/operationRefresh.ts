@@ -4,6 +4,7 @@ import type { Operation } from "../bindings/github.com/rikkimongoose/marten-comm
 // both captured directories. Panels that navigated elsewhere ignore the opaque
 // locations in FilePanel.refreshDirectory.
 export function operationRefreshLocations(operation: Operation): readonly string[] {
+  if (operation.type === "file.trash") return operation.context.sourceDirectory ? [operation.context.sourceDirectory] : [];
   if (operation.type !== "file.copy" && operation.type !== "file.move") return [];
   const values: string[] = [];
   if (operation.context.destinationDirectory) values.push(operation.context.destinationDirectory);

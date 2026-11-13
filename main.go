@@ -41,11 +41,12 @@ func main() {
 	copyService := app.NewCopyService(filesystem, operationManager)
 	moveService := app.NewMoveService(filesystem, operationManager)
 	operationService := desktop.NewOperationService(operationManager)
+	trashService := app.NewTrashService(localfs.SystemTrash{}, operationManager)
 	desktopApp := application.New(application.Options{
 		Name: "Marten Commander", Description: "Двухпанельный файловый менеджер",
 		Services: []application.Service{
 			application.NewService(desktop.NewDirectoryService(directories, initialIsHome)),
-			application.NewService(desktop.NewCommandServiceWithOperations(files, editor, copyService, moveService, terminal)),
+			application.NewService(desktop.NewCommandServiceWithTrash(files, editor, copyService, moveService, terminal, trashService)),
 			application.NewService(desktop.NewVolumeService(volumes.NewService())),
 			application.NewService(operationService),
 		},

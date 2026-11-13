@@ -18,3 +18,10 @@ import * as $models from "./models.js";
 export function ExecuteCommand(request: $models.CommandRequest): $CancellablePromise<void> {
     return $Call.ByID(491011817, request);
 }
+
+/**
+ * PrepareTrash reads identities before confirmation; it cannot mutate files.
+ */
+export function PrepareTrash(command: $models.CommandContext): $CancellablePromise<$models.TrashPreview> {
+    return $Call.ByID(4124344078, command);
+}

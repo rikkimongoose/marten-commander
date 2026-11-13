@@ -20,6 +20,8 @@ export type {
     Entry,
     HomeDirectory,
     PanelContext,
+    TrashEntry,
+    TrashPreview,
     Volume,
     VolumeSpace
 } from "./models.js";
