@@ -109,3 +109,21 @@ func TestFileServiceHonoursCancellationBeforeLaunching(t *testing.T) {
 		t.Fatalf("Open = %v, launched %q", err, launcher.seen)
 	}
 }
+
+func TestFileServiceCreatesDirectoryAndRejectsPaths(t *testing.T) {
+	parent := t.TempDir()
+	service := app.NewFileService(localfs.LocalFileSystem{}, &launcherStub{})
+	for _, name := range []string{"обычный", "с пробелами", "日本語 🦊"} {
+		if err := service.CreateDirectory(context.Background(), parent, name); err != nil {
+			t.Fatalf("CreateDirectory(%q): %v", name, err)
+		}
+		if info, err := os.Stat(filepath.Join(parent, name)); err != nil || !info.IsDir() {
+			t.Fatalf("created %q: info=%v err=%v", name, info, err)
+		}
+	}
+	for _, name := range []string{"", "\t ", ".", "..", "nested/child"} {
+		if err := service.CreateDirectory(context.Background(), parent, name); !errors.Is(err, fs.ErrInvalid) {
+			t.Errorf("CreateDirectory(%q) = %v, want invalid", name, err)
+		}
+	}
+}

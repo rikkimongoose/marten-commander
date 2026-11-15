@@ -31,7 +31,15 @@ const columns: ColDef<PanelRow>[] = [
 ];
 const defaultColumn: ColDef<PanelRow> = { sortable: true, resizable: true, cellDataType: false, sortingOrder: ["asc", "desc"] };
 const rowHeight = 28;
-type View = { current?: string; index: number; top?: string; topIndex: number; focus: boolean };
+type View = { current?: string; index: number; top?: string; topIndex: number; focus: boolean; preferred?: string };
+
+function focusedKind(row?: PanelRow): PanelContext["focusedKind"] {
+  if (!fileLocation(row)) return null;
+  switch (row?.kind) {
+    case "file": case "directory": case "symlink": case "other": return row.kind;
+    default: return "other";
+  }
+}
 
 export interface FilePanelHandle {
   getContext(): PanelContext;
@@ -42,6 +50,9 @@ export interface FilePanelHandle {
   openEntry(directory: string, rowId: string): void;
   parent(directory: string): void;
   focusList(): void;
+  refreshCreated(directoryLocation: string, name: string): void;
+  refreshDirectory(directoryLocation: string): void;
+  describeLocations(locations: readonly string[]): string[];
 }
 
 type FilePanelProps = { label: string; active: boolean; activate: () => void; onContextChange: () => void;
@@ -67,10 +78,13 @@ export const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(function Fi
   const ctrlActivatesPanel = useRef(false);
   const doubleClickSelection = useRef<{ rowId: string; locations: string[] }>();
   const restore = useRef<View>();
+  const created = useRef<{ directoryLocation: string; name: string }>();
   const gridRendered = useRef(false);
   const loader = useRef<DirectoryLoader<PanelNavigationRequest>>();
   const activeRef = useRef(active);
   activeRef.current = active;
+  const showHiddenRef = useRef(showHidden);
+  showHiddenRef.current = showHidden;
   const entries = useMemo(() => visibleEntries(directory?.entries ?? [], showHidden), [directory, showHidden]);
   const rows = useMemo(() => panelRows(directory, entries), [directory, entries]);
 
@@ -95,10 +109,20 @@ export const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(function Fi
       }
     },
     focusList,
+    refreshCreated: (directoryLocation, name) => {
+      if (snapshot.current?.location !== directoryLocation) return;
+      created.current = { directoryLocation, name };
+      navigate({ path: "", location: directoryLocation });
+    },
+    refreshDirectory: directoryLocation => {
+      if (snapshot.current?.location === directoryLocation) navigate({ path: "", location: directoryLocation });
+    },
+    describeLocations: locations => locations.map(location => api.current?.getRowNode(location)?.data?.name ?? location),
     getContext: () => ({
       directoryLocation: snapshot.current?.location ?? null,
       selectedLocations: api.current?.getSelectedNodes().flatMap(node => fileLocation(node.data) ? [node.data!.id] : []) ?? [],
       focusedLocation: current.current ? fileLocation(api.current?.getRowNode(current.current)?.data) : null,
+      focusedKind: current.current ? focusedKind(api.current?.getRowNode(current.current)?.data) : null,
     }),
     selectAll: () => {
       if (!api.current || api.current.isDestroyed()) throw new CommandError("unavailable", "Таблица недоступна.");
@@ -132,6 +156,9 @@ export const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(function Fi
     const grid = api.current;
     const view = restore.current;
     if (!grid || !view) return;
+    // Same-directory updates may emit a model event before React has supplied
+    // the new rows. Keep the requested created entry until its row exists.
+    if (view.preferred && !grid.getRowNode(view.preferred)) return;
     restore.current = undefined;
     const ids: string[] = [];
     grid.forEachNodeAfterFilterAndSort(node => { if (node.data) ids.push(node.data.id); });
@@ -156,8 +183,18 @@ export const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(function Fi
         const returned = returnCursor(snapshot.current, next);
         const focus = !!gridRoot.current?.contains(document.activeElement) ||
           (!snapshot.current && activeRef.current && document.activeElement === document.body);
-        restore.current = sameDirectory ? capture() : { current: returned, top: returned,
+        const view = sameDirectory ? capture() : { current: returned, top: returned,
           index: 0, topIndex: 0, focus };
+        const preferred = created.current;
+        if (preferred?.directoryLocation === next.location) {
+          created.current = undefined;
+          const entry = next.entries?.find(item => item.name === preferred.name);
+          if (entry && (showHiddenRef.current || !entry.hidden)) {
+            view.current = entry.id;
+            view.preferred = entry.id;
+          }
+        }
+        restore.current = view;
         if (!sameDirectory) {
           api.current?.deselectAll();
           current.current = undefined;

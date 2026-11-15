@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/rikkimongoose/marten-commander/internal/core"
 )
@@ -18,9 +19,10 @@ import (
 type LocalFileSystem struct{}
 
 var (
-	_ core.FileSystem   = LocalFileSystem{}
-	_ core.LinkReader   = LocalFileSystem{}
-	_ core.PathResolver = LocalFileSystem{}
+	_ core.FileSystem       = LocalFileSystem{}
+	_ core.LinkReader       = LocalFileSystem{}
+	_ core.PathResolver     = LocalFileSystem{}
+	_ core.DirectoryCreator = LocalFileSystem{}
 )
 
 // ReadDir follows a directory symlink to allow navigation, but never follows the
@@ -114,6 +116,20 @@ func (LocalFileSystem) ResolvePath(ctx context.Context, path string) (string, er
 		return "", err
 	}
 	return resolved, nil
+}
+
+// CreateDirectory creates exactly one child and deliberately uses os.Mkdir,
+// so missing parents are reported instead of being created implicitly.
+func (LocalFileSystem) CreateDirectory(ctx context.Context, parent, name string) error {
+	if err := check(ctx, "mkdir", parent); err != nil {
+		return err
+	}
+	if strings.TrimSpace(name) == "" || name == "." || name == ".." ||
+		filepath.IsAbs(name) || filepath.VolumeName(name) != "" || strings.ContainsRune(name, os.PathSeparator) ||
+		strings.ContainsRune(name, 0) || filepath.Base(name) != name {
+		return pathError("mkdir", parent, fmt.Errorf("%w: name must be one path component", fs.ErrInvalid))
+	}
+	return os.Mkdir(childPath(parent, name), 0o777)
 }
 
 func entry(path string, info fs.FileInfo) core.FileEntry {

@@ -1,7 +1,7 @@
 [Desktop Entry]
 Version=1.0
-Name=My Product
-Comment=A marten-commander application
+Name=Marten Commander
+Comment=Two-panel file manager
 # The Exec line includes %u to pass the URL to the application
 Exec=/usr/local/bin/marten-commander %u
 Terminal=false

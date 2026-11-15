@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { CommandDispatcher } from "../src/commands.ts";
-import { registerFileCommands } from "../src/fileCommands.ts";
+import { CANCEL_COMMAND, CommandDispatcher, CommandError } from "../src/commands.ts";
+import { directoryNameError, moveDestinationError, registerFileCommands } from "../src/fileCommands.ts";
 
 const location = value => Buffer.from(value).toString("base64url");
 
@@ -35,4 +35,209 @@ test("file.open validates its concrete row parameter before the backend", async 
   const dispatcher = new CommandDispatcher(() => context);
   registerFileCommands(dispatcher, () => assert.fail("backend must not run"));
   await assert.rejects(dispatcher.dispatch("file.open", {}), error => error.code === "invalid_params");
+});
+
+test("file.edit uses only the focused regular file despite multiple selection", async () => {
+  const focused = location("/left/текущий файл с пробелами.txt");
+  const context = {
+    activePanel: "left",
+    left: {
+      directoryLocation: location("/left"),
+      selectedLocations: [location("/left/one.txt"), location("/left/two.txt")],
+      focusedLocation: focused,
+      focusedKind: "file",
+    },
+    right: { directoryLocation: location("/right"), selectedLocations: [], focusedLocation: null, focusedKind: null },
+  };
+  let received;
+  const dispatcher = new CommandDispatcher(() => context, () => "edit-1");
+  registerFileCommands(dispatcher, request => { received = request; });
+
+  assert.equal(dispatcher.availability("file.edit").enabled, true);
+  await dispatcher.dispatch("file.edit");
+  assert.equal(received.type, "file.edit");
+  assert.deepEqual(received.params, { location: focused });
+  assert.deepEqual(received.context.left.selectedLocations, context.left.selectedLocations);
+});
+
+test("file.edit is unavailable for directories, parent row and a missing cursor", async () => {
+  const context = {
+    activePanel: "left",
+    left: { directoryLocation: location("/left"), selectedLocations: [], focusedLocation: location("/left/dir"), focusedKind: "directory" },
+    right: { directoryLocation: location("/right"), selectedLocations: [], focusedLocation: null, focusedKind: null },
+  };
+  let backendCalls = 0;
+  const dispatcher = new CommandDispatcher(() => context);
+  registerFileCommands(dispatcher, () => { backendCalls++; });
+  for (const [focusedLocation, focusedKind] of [
+    [location("/left/dir"), "directory"],
+    [null, null],
+    [location("/left/link"), "symlink"],
+    [location("/left/device"), "other"],
+  ]) {
+    context.left.focusedLocation = focusedLocation;
+    context.left.focusedKind = focusedKind;
+    assert.equal(dispatcher.availability("file.edit").enabled, false);
+    await assert.rejects(dispatcher.dispatch("file.edit"), error => error.code === "unavailable");
+  }
+  assert.equal(backendCalls, 0);
+});
+
+test("mkdir name validation rejects empty, dot and path values but preserves spaces and Unicode", () => {
+  for (const name of ["", "   ", ".", "..", "nested/child", "/absolute"]) {
+    assert.notEqual(directoryNameError(name), "", name);
+  }
+  for (const name of ["ordinary", "with spaces", "Кириллица 日本語 🦊", " leading and trailing "]) {
+    assert.equal(directoryNameError(name), "", name);
+  }
+});
+
+test("file.mkdir retains the original panel context across dialog, retry and active-panel switch", async () => {
+  const left = location("/left");
+  const context = {
+    activePanel: "left",
+    left: { directoryLocation: left, selectedLocations: [location("/left/selected")], focusedLocation: location("/left/current") },
+    right: { directoryLocation: location("/right"), selectedLocations: [], focusedLocation: null },
+  };
+  const firstName = Promise.withResolvers();
+  const calls = [], messages = [], completions = [], refreshed = [];
+  const prompt = {
+    open: snapshot => { assert.equal(snapshot.activePanel, "left"); return firstName.promise; },
+    retry: message => { messages.push(message); return Promise.resolve({ name: "Каталог 🦊" }); },
+    complete: () => completions.push(true),
+  };
+  const dispatcher = new CommandDispatcher(() => context, () => "mkdir-1");
+  registerFileCommands(dispatcher, request => {
+    calls.push(request);
+    if (calls.length === 1) throw new CommandError("mkdir_failed", "Каталог уже существует.");
+  }, { prompt, succeeded: (request, name) => refreshed.push([request.context.activePanel, request.context.left.directoryLocation, name]) });
+
+  const pending = dispatcher.dispatch("file.mkdir");
+  context.activePanel = "right";
+  firstName.resolve({ name: "first" });
+  assert.equal(await pending, "executed");
+  assert.equal(calls.length, 2);
+  assert.ok(calls.every(call => call.context.activePanel === "left" && call.context.left.directoryLocation === left));
+  assert.deepEqual(calls.map(call => call.params.name), ["first", "Каталог 🦊"]);
+  assert.deepEqual(messages, ["Каталог уже существует."]);
+  assert.deepEqual(refreshed, [["left", left, "Каталог 🦊"]]);
+  assert.equal(completions.length, 1);
+});
+
+test("cancelling mkdir preparation performs no backend operation", async () => {
+  const context = {
+    activePanel: "left",
+    left: { directoryLocation: location("/left"), selectedLocations: [], focusedLocation: null },
+    right: { directoryLocation: location("/right"), selectedLocations: [], focusedLocation: null },
+  };
+  let backendCalls = 0;
+  const dispatcher = new CommandDispatcher(() => context);
+  registerFileCommands(dispatcher, () => { backendCalls++; }, {
+    prompt: { open: () => Promise.resolve(CANCEL_COMMAND), retry: () => assert.fail("no retry"), complete: () => assert.fail("no completion") },
+    succeeded: () => assert.fail("no refresh"),
+  });
+  assert.equal(await dispatcher.dispatch("file.mkdir"), "cancelled");
+  assert.equal(backendCalls, 0);
+});
+
+test("file.copy freezes explicit selection and destination while panels change", async () => {
+  const context = {
+    activePanel: "left",
+    left: { directoryLocation: location("/left"), selectedLocations: [location("/left/one"), location("/left/two")],
+      focusedLocation: location("/left/cursor") },
+    right: { directoryLocation: location("/right"), selectedLocations: [], focusedLocation: null },
+  };
+  const answer = Promise.withResolvers();
+  const calls = [], completed = [];
+  const dispatcher = new CommandDispatcher(() => context, () => "copy-1");
+  registerFileCommands(dispatcher, request => calls.push(request), undefined, {
+    prompt: { open: snapshot => { assert.equal(snapshot.activePanel, "left"); return answer.promise; },
+      retry: () => assert.fail("no retry"), complete: () => completed.push(true) },
+  });
+  const pending = dispatcher.dispatch("file.copy");
+  context.activePanel = "right";
+  context.left.selectedLocations = [location("/left/changed")];
+  answer.resolve({ destination: "/edited target/Каталог" });
+  assert.equal(await pending, "executed");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].context.activePanel, "left");
+  assert.deepEqual(calls[0].context.left.selectedLocations, [location("/left/one"), location("/left/two")]);
+  assert.deepEqual(calls[0].params, { destination: "/edited target/Каталог" });
+  assert.equal(completed.length, 1);
+});
+
+test("file.copy falls back to cursor and cancellation has no side effects", async () => {
+  const context = { activePanel: "left",
+    left: { directoryLocation: location("/left"), selectedLocations: [], focusedLocation: location("/left/cursor") },
+    right: { directoryLocation: location("/right"), selectedLocations: [], focusedLocation: null } };
+  let backendCalls = 0;
+  const dispatcher = new CommandDispatcher(() => context);
+  registerFileCommands(dispatcher, () => { backendCalls++; }, undefined, {
+    prompt: { open: snapshot => { assert.equal(snapshot.left.focusedLocation, location("/left/cursor")); return CANCEL_COMMAND; },
+      retry: () => assert.fail("no retry"), complete: () => assert.fail("no completion") },
+  });
+  assert.equal(dispatcher.availability("file.copy").enabled, true);
+  assert.equal(await dispatcher.dispatch("file.copy"), "cancelled");
+  assert.equal(backendCalls, 0);
+  context.left.focusedLocation = null;
+  assert.equal(dispatcher.availability("file.copy").enabled, false);
+});
+
+test("file.move freezes arbitrary selection and edited target while panels change", async () => {
+  const context = { activePanel: "left",
+    left: { directoryLocation: location("/left"), selectedLocations: [location("/left/one"), location("/left/four")],
+      focusedLocation: location("/left/seven") },
+    right: { directoryLocation: location("/right"), selectedLocations: [], focusedLocation: null } };
+  const answer = Promise.withResolvers();
+  const calls = [], completed = [];
+  const dispatcher = new CommandDispatcher(() => context, () => "move-1");
+  registerFileCommands(dispatcher, request => calls.push(request), undefined, undefined, {
+    prompt: { open: snapshot => { assert.equal(snapshot.activePanel, "left"); return answer.promise; },
+      retry: () => assert.fail("no retry"), complete: () => completed.push(true) },
+  });
+  const pending = dispatcher.dispatch("file.move");
+  context.activePanel = "right";
+  context.left.selectedLocations = [location("/left/changed")];
+  answer.resolve({ destination: "/right/Новое имя" });
+  assert.equal(await pending, "executed");
+  assert.deepEqual(calls[0].context.left.selectedLocations, [location("/left/one"), location("/left/four")]);
+  assert.deepEqual(calls[0].params, { destination: "/right/Новое имя" });
+  assert.equal(completed.length, 1);
+});
+
+test("single-source move accepts a plain new name and keeps the frozen source context", async () => {
+  const context = { activePanel: "left",
+    left: { directoryLocation: location("/left"), selectedLocations: [], focusedLocation: location("/left/старое имя") },
+    right: { directoryLocation: location("/right"), selectedLocations: [], focusedLocation: null } };
+  let received;
+  const dispatcher = new CommandDispatcher(() => context);
+  registerFileCommands(dispatcher, request => { received = request; }, undefined, undefined, {
+    prompt: { open: () => ({ destination: "новое имя" }), retry: () => assert.fail("no retry"), complete: () => {} },
+  });
+  assert.equal(await dispatcher.dispatch("file.move"), "executed");
+  assert.deepEqual(received.params, { destination: "новое имя" });
+  assert.equal(received.context.left.focusedLocation, location("/left/старое имя"));
+});
+
+test("move destination validation distinguishes single rename from multiple move", () => {
+  assert.equal(moveDestinationError("новое имя", 1), "");
+  assert.equal(moveDestinationError("/tmp/target/new name", 1), "");
+  assert.notEqual(moveDestinationError("nested/name", 1), "");
+  assert.notEqual(moveDestinationError("новое имя", 2), "");
+  assert.equal(moveDestinationError("/tmp/existing", 2), "");
+});
+
+test("file.move shortcut preparation cancels without backend and falls back to cursor", async () => {
+  const context = { activePanel: "left",
+    left: { directoryLocation: location("/left"), selectedLocations: [], focusedLocation: location("/left/current") },
+    right: { directoryLocation: location("/right"), selectedLocations: [], focusedLocation: null } };
+  let calls = 0;
+  const dispatcher = new CommandDispatcher(() => context);
+  registerFileCommands(dispatcher, () => { calls++; }, undefined, undefined, {
+    prompt: { open: snapshot => { assert.equal(snapshot.left.focusedLocation, location("/left/current")); return CANCEL_COMMAND; },
+      retry: () => assert.fail("no retry"), complete: () => assert.fail("no completion") },
+  });
+  assert.equal(dispatcher.availability("file.move").enabled, true);
+  assert.equal(await dispatcher.dispatch("file.move"), "cancelled");
+  assert.equal(calls, 0);
 });

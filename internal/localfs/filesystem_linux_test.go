@@ -108,3 +108,18 @@ func TestPermissionErrors(t *testing.T) {
 		t.Fatalf("Lstat inaccessible child = %v", err)
 	}
 }
+
+func TestCreateDirectoryPermissionDenied(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses ordinary permission checks")
+	}
+	parent := t.TempDir()
+	if err := os.Chmod(parent, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(parent, 0o700) })
+	err := (localfs.LocalFileSystem{}).CreateDirectory(context.Background(), parent, "denied")
+	if !errors.Is(err, fs.ErrPermission) {
+		t.Fatalf("CreateDirectory = %v, want permission denied", err)
+	}
+}

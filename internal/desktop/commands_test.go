@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"path/filepath"
 	"reflect"
 	"testing"
+
+	"github.com/rikkimongoose/marten-commander/internal/operations"
 )
 
 func commandFixture(t *testing.T) CommandRequest {
@@ -16,18 +19,44 @@ func commandFixture(t *testing.T) CommandRequest {
 	return CommandRequest{
 		ID: "call-1", Type: "unsupported.type", Params: json.RawMessage(`{}`),
 		Context: CommandContext{ActivePanel: "left",
-			Left:  PanelContext{&left, []string{selected}, &focused},
-			Right: PanelContext{&right, []string{}, nil}},
+			Left:  PanelContext{DirectoryLocation: &left, SelectedLocations: []string{selected}, FocusedLocation: &focused},
+			Right: PanelContext{DirectoryLocation: &right, SelectedLocations: []string{}}},
 	}
 }
 
 type fileServiceStub struct {
-	seen string
+	seen          string
+	createdParent string
+	createdName   string
+	err           error
+}
+
+type copyServiceStub struct {
+	snapshot    operations.ContextSnapshot
+	sources     []string
+	destination string
+	err         error
+}
+
+type editorServiceStub struct {
+	path string
 	err  error
+}
+
+func (s *editorServiceStub) Edit(_ context.Context, path string) error { s.path = path; return s.err }
+
+func (s *copyServiceStub) Start(_ context.Context, snapshot operations.ContextSnapshot, sources []string, destination string) (operations.Operation, error) {
+	s.snapshot, s.sources, s.destination = snapshot, append([]string(nil), sources...), destination
+	return operations.Operation{ID: "copy-operation", State: operations.Running}, s.err
 }
 
 func (s *fileServiceStub) Open(_ context.Context, path string) error {
 	s.seen = path
+	return s.err
+}
+
+func (s *fileServiceStub) CreateDirectory(_ context.Context, parent, name string) error {
+	s.createdParent, s.createdName = parent, name
 	return s.err
 }
 
@@ -84,7 +113,7 @@ func TestFileOpenCommandRejectsBadParametersAndReportsServiceErrors(t *testing.T
 	tests := []struct {
 		name   string
 		params string
-		files  fileOpenService
+		files  fileCommandService
 		code   string
 	}{
 		{"missing location", `{}`, &fileServiceStub{}, "invalid_params"},
@@ -103,6 +132,264 @@ func TestFileOpenCommandRejectsBadParametersAndReportsServiceErrors(t *testing.T
 			}
 		})
 	}
+}
+
+func TestFileEditCommandUsesOnlyFocusedFileDespiteSelection(t *testing.T) {
+	request := commandFixture(t)
+	request.Type = "file.edit"
+	request.Params = json.RawMessage(`{"location":"` + *request.Context.Left.FocusedLocation + `"}`)
+	editor := &editorServiceStub{}
+	if err := NewCommandServiceWithOperations(&fileServiceStub{}, editor, nil, nil).ExecuteCommand(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	want, _ := decodeLocation(*request.Context.Left.FocusedLocation)
+	if editor.path != want {
+		t.Fatalf("edited %q, want cursor %q", editor.path, want)
+	}
+	selected, _ := decodeLocation(request.Context.Left.SelectedLocations[0])
+	if editor.path == selected {
+		t.Fatal("multiple selection replaced cursor operand")
+	}
+}
+
+func TestFileEditCommandValidatesCursorAndClassifiesErrors(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		edit    func(*CommandRequest)
+		service editorCommandService
+		code    string
+	}{
+		{"missing params", func(r *CommandRequest) { r.Params = json.RawMessage(`{}`) }, &editorServiceStub{}, "invalid_params"},
+		{"selection instead of cursor", func(r *CommandRequest) {
+			r.Params = json.RawMessage(`{"location":"` + r.Context.Left.SelectedLocations[0] + `"}`)
+		}, &editorServiceStub{}, "invalid_context"},
+		{"unavailable", func(*CommandRequest) {}, nil, "unavailable"},
+		{"missing file", func(*CommandRequest) {}, &editorServiceStub{err: fs.ErrNotExist}, "edit_failed"},
+		{"permission", func(*CommandRequest) {}, &editorServiceStub{err: fs.ErrPermission}, "edit_failed"},
+		{"directory", func(*CommandRequest) {}, &editorServiceStub{err: fs.ErrInvalid}, "edit_failed"},
+		{"launcher", func(*CommandRequest) {}, &editorServiceStub{err: errors.New("editor missing")}, "edit_failed"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := commandFixture(t)
+			request.Type = "file.edit"
+			request.Params = json.RawMessage(`{"location":"` + *request.Context.Left.FocusedLocation + `"}`)
+			test.edit(&request)
+			err := NewCommandServiceWithOperations(&fileServiceStub{}, test.service, nil, nil).ExecuteCommand(context.Background(), request)
+			var commandErr *CommandError
+			if !errors.As(err, &commandErr) || commandErr.Code != test.code || commandErr.Message == "" {
+				t.Fatalf("wanted %s, got %#v", test.code, err)
+			}
+		})
+	}
+}
+
+func TestMkdirCommandUsesSnapshotSourceDirectory(t *testing.T) {
+	request := commandFixture(t)
+	request.Type = "file.mkdir"
+	request.Params = json.RawMessage(`{"name":"Каталог с пробелами 🦊"}`)
+	files := &fileServiceStub{}
+	if err := NewCommandService(files).ExecuteCommand(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	want, _ := decodeLocation(*request.Context.Left.DirectoryLocation)
+	if files.createdParent != want || files.createdName != "Каталог с пробелами 🦊" {
+		t.Fatalf("CreateDirectory(%q, %q), want (%q, exact name)", files.createdParent, files.createdName, want)
+	}
+	if files.seen != "" {
+		t.Fatalf("mkdir unexpectedly opened %q", files.seen)
+	}
+}
+
+func TestMkdirCommandValidatesAndClassifiesErrors(t *testing.T) {
+	request := commandFixture(t)
+	request.Type = "file.mkdir"
+	tests := []struct {
+		name   string
+		params string
+		err    error
+		code   string
+	}{
+		{"empty", `{"name":""}`, nil, "invalid_params"},
+		{"dot", `{"name":"."}`, nil, "invalid_params"},
+		{"dotdot", `{"name":".."}`, nil, "invalid_params"},
+		{"nested", `{"name":"nested/child"}`, nil, "invalid_params"},
+		{"unknown parameter", `{"name":"child","other":true}`, nil, "invalid_params"},
+		{"exists", `{"name":"child"}`, fs.ErrExist, "mkdir_failed"},
+		{"parent removed", `{"name":"child"}`, fs.ErrNotExist, "mkdir_failed"},
+		{"permission", `{"name":"child"}`, fs.ErrPermission, "mkdir_failed"},
+		{"other", `{"name":"child"}`, errors.New("disk error"), "mkdir_failed"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request.Params = json.RawMessage(test.params)
+			err := NewCommandService(&fileServiceStub{err: test.err}).ExecuteCommand(context.Background(), request)
+			var commandErr *CommandError
+			if !errors.As(err, &commandErr) || commandErr.Code != test.code || commandErr.Message == "" {
+				t.Fatalf("wanted %s, got %#v", test.code, err)
+			}
+		})
+	}
+}
+
+func TestCopyCommandUsesEffectiveSelectionAndEditedDestination(t *testing.T) {
+	request := commandFixture(t)
+	request.Type = "file.copy"
+	destination := filepath.Join(t.TempDir(), "назначение с пробелами")
+	request.Params = json.RawMessage(`{"destination":` + string(mustJSON(t, destination)) + `}`)
+	copies := &copyServiceStub{}
+	if err := NewCommandService(&fileServiceStub{}, copies).ExecuteCommand(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	selected, _ := decodeLocation(request.Context.Left.SelectedLocations[0])
+	if !reflect.DeepEqual(copies.sources, []string{selected}) || copies.destination != destination {
+		t.Fatalf("copy start: sources=%q destination=%q", copies.sources, copies.destination)
+	}
+	if copies.snapshot.ActivePanel != "left" || len(copies.snapshot.Sources) != 1 ||
+		copies.snapshot.DestinationDirectory == nil || *copies.snapshot.DestinationDirectory != encode(destination) {
+		t.Fatalf("snapshot: %#v", copies.snapshot)
+	}
+	request.Context.Left.SelectedLocations = []string{}
+	focused, _ := decodeLocation(*request.Context.Left.FocusedLocation)
+	if err := NewCommandService(&fileServiceStub{}, copies).ExecuteCommand(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(copies.sources, []string{focused}) {
+		t.Fatalf("cursor fallback: %q", copies.sources)
+	}
+}
+
+func TestCopyCommandRejectsInvalidContextAndDestination(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		edit func(*CommandRequest)
+		code string
+	}{
+		{"relative destination", func(r *CommandRequest) { r.Params = json.RawMessage(`{"destination":"relative"}`) }, "invalid_params"},
+		{"no source", func(r *CommandRequest) {
+			r.Context.Left.SelectedLocations = []string{}
+			r.Context.Left.FocusedLocation = nil
+		}, "unavailable"},
+		{"source outside panel", func(r *CommandRequest) {
+			r.Context.Left.SelectedLocations = []string{encode(filepath.Join(t.TempDir(), "outside"))}
+		}, "invalid_context"},
+		{"backend unavailable", func(*CommandRequest) {}, "unavailable"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := commandFixture(t)
+			request.Type = "file.copy"
+			request.Params = json.RawMessage(`{"destination":"/tmp"}`)
+			test.edit(&request)
+			service := NewCommandService(&fileServiceStub{})
+			if test.name != "backend unavailable" {
+				service = NewCommandService(&fileServiceStub{}, &copyServiceStub{})
+			}
+			err := service.ExecuteCommand(context.Background(), request)
+			var commandErr *CommandError
+			if !errors.As(err, &commandErr) || commandErr.Code != test.code {
+				t.Fatalf("wanted %s, got %v", test.code, err)
+			}
+		})
+	}
+}
+
+func TestMoveCommandUsesImmutableSelectionAndDestination(t *testing.T) {
+	request := commandFixture(t)
+	request.Type = "file.move"
+	destination := t.TempDir()
+	request.Params = json.RawMessage(`{"destination":` + string(mustJSON(t, destination)) + `}`)
+	moves := &copyServiceStub{}
+	service := NewCommandService(&fileServiceStub{}).withMoves(moves)
+	if err := service.ExecuteCommand(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	selected, _ := decodeLocation(request.Context.Left.SelectedLocations[0])
+	if !reflect.DeepEqual(moves.sources, []string{selected}) || moves.destination != destination {
+		t.Fatalf("move start: %#v", moves)
+	}
+	if moves.snapshot.ActivePanel != "left" || moves.snapshot.SourceDirectory != *request.Context.Left.DirectoryLocation ||
+		moves.snapshot.DestinationDirectory == nil || *moves.snapshot.DestinationDirectory != encode(filepath.Dir(destination)) {
+		t.Fatalf("snapshot: %#v", moves.snapshot)
+	}
+	request.Context.Left.SelectedLocations = []string{}
+	focused, _ := decodeLocation(*request.Context.Left.FocusedLocation)
+	if err := service.ExecuteCommand(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(moves.sources, []string{focused}) {
+		t.Fatalf("cursor fallback: %q", moves.sources)
+	}
+}
+
+func TestMoveCommandResolvesSinglePlainNameInSourceDirectory(t *testing.T) {
+	request := commandFixture(t)
+	request.Type = "file.move"
+	request.Context.Left.SelectedLocations = []string{}
+	request.Params = json.RawMessage(`{"destination":"новое имя 🦊"}`)
+	moves := &copyServiceStub{}
+	if err := NewCommandService(&fileServiceStub{}).withMoves(moves).ExecuteCommand(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	sourceDirectory := mustDecode(t, *request.Context.Left.DirectoryLocation)
+	want := filepath.Join(sourceDirectory, "новое имя 🦊")
+	if moves.destination != want {
+		t.Fatalf("destination = %q, want %q", moves.destination, want)
+	}
+	if moves.snapshot.DestinationDirectory == nil || *moves.snapshot.DestinationDirectory != encode(sourceDirectory) {
+		t.Fatalf("destination snapshot: %#v", moves.snapshot)
+	}
+	var parameters struct {
+		Destination string `json:"destination"`
+	}
+	if err := json.Unmarshal([]byte(moves.snapshot.ParametersJSON), &parameters); err != nil || parameters.Destination != want {
+		t.Fatalf("parameters = %#v, err=%v", parameters, err)
+	}
+}
+
+func TestMoveCommandRejectsParentAndInvalidMultipleTarget(t *testing.T) {
+	request := commandFixture(t)
+	request.Type = "file.move"
+	request.Params = json.RawMessage(`{"destination":"nested/target"}`)
+	err := NewCommandService(&fileServiceStub{}).withMoves(&copyServiceStub{}).ExecuteCommand(context.Background(), request)
+	var commandErr *CommandError
+	if !errors.As(err, &commandErr) || commandErr.Code != "invalid_params" {
+		t.Fatalf("relative: %#v", err)
+	}
+	parent := filepath.Join(filepath.Dir(mustDecode(t, *request.Context.Left.DirectoryLocation)), "..")
+	request.Context.Left.SelectedLocations = []string{encode(parent)}
+	request.Params = json.RawMessage(`{"destination":"/tmp"}`)
+	err = NewCommandService(&fileServiceStub{}).withMoves(&copyServiceStub{}).ExecuteCommand(context.Background(), request)
+	if !errors.As(err, &commandErr) || commandErr.Code != "invalid_context" {
+		t.Fatalf("parent: %#v", err)
+	}
+	request = commandFixture(t)
+	request.Type = "file.move"
+	request.Context.Left.SelectedLocations = []string{
+		encode(filepath.Join(mustDecode(t, *request.Context.Left.DirectoryLocation), "one")),
+		encode(filepath.Join(mustDecode(t, *request.Context.Left.DirectoryLocation), "two")),
+	}
+	request.Params = json.RawMessage(`{"destination":"new-name"}`)
+	err = NewCommandService(&fileServiceStub{}).withMoves(&copyServiceStub{}).ExecuteCommand(context.Background(), request)
+	if !errors.As(err, &commandErr) || commandErr.Code != "invalid_params" {
+		t.Fatalf("multiple relative target: %#v", err)
+	}
+}
+
+func mustDecode(t *testing.T, value string) string {
+	t.Helper()
+	decoded, ok := decodeLocation(value)
+	if !ok {
+		t.Fatal("decode")
+	}
+	return decoded
+}
+
+func mustJSON(t *testing.T, value string) []byte {
+	t.Helper()
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
 }
 
 func TestCommandValidationAndUnsupportedTypes(t *testing.T) {

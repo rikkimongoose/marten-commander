@@ -147,6 +147,40 @@ func TestUnusualNames(t *testing.T) {
 	}
 }
 
+func TestCreateDirectoryCreatesExactlyOneChild(t *testing.T) {
+	parent := t.TempDir()
+	filesystem := localfs.LocalFileSystem{}
+	for _, name := range []string{"ordinary", "with spaces", "Кириллица 日本語 🦊"} {
+		if err := filesystem.CreateDirectory(context.Background(), parent, name); err != nil {
+			t.Fatalf("CreateDirectory(%q): %v", name, err)
+		}
+		info, err := os.Stat(filepath.Join(parent, name))
+		if err != nil || !info.IsDir() {
+			t.Fatalf("created %q: info=%v err=%v", name, info, err)
+		}
+	}
+	for _, name := range []string{"", "   ", ".", "..", "nested/child"} {
+		if err := filesystem.CreateDirectory(context.Background(), parent, name); !errors.Is(err, fs.ErrInvalid) {
+			t.Errorf("CreateDirectory(%q) = %v, want invalid", name, err)
+		}
+	}
+}
+
+func TestCreateDirectoryReportsExistingAndMissingParent(t *testing.T) {
+	filesystem := localfs.LocalFileSystem{}
+	parent := t.TempDir()
+	if err := filesystem.CreateDirectory(context.Background(), parent, "existing"); err != nil {
+		t.Fatal(err)
+	}
+	if err := filesystem.CreateDirectory(context.Background(), parent, "existing"); !errors.Is(err, fs.ErrExist) {
+		t.Fatalf("existing = %v", err)
+	}
+	missing := filepath.Join(parent, "removed")
+	if err := filesystem.CreateDirectory(context.Background(), missing, "child"); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("missing parent = %v", err)
+	}
+}
+
 func assertContents(t *testing.T, filesystem core.FileSystem, path, want string) {
 	t.Helper()
 	r, err := filesystem.Open(context.Background(), path)

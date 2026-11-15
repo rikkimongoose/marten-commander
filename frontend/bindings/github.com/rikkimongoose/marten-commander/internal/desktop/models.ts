@@ -80,6 +80,19 @@ export interface PanelContext {
     "directoryLocation": string | null;
     "selectedLocations": string[] | null;
     "focusedLocation": string | null;
+    "focusedKind"?: string | null;
+}
+
+export interface TrashEntry {
+    "location": string;
+    "name": string;
+    "kind": string;
+    "revision": string;
+}
+
+export interface TrashPreview {
+    "directory": string;
+    "entries": TrashEntry[] | null;
 }
 
 export interface Volume {

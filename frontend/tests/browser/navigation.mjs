@@ -8,7 +8,7 @@ import react from "@vitejs/plugin-react";
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || "playwright-core");
 const server = await createServer({
   configFile: false, root: fileURLToPath(new URL("../../", import.meta.url)), plugins: [react()],
-  resolve: { alias: [{ find: /.*bindings\/.*\/desktop\/(commandservice|directoryservice|volumeservice)(\.[jt]s)?$/,
+  resolve: { alias: [{ find: /.*bindings\/.*\/desktop\/(commandservice|directoryservice|operationservice|volumeservice)(\.[jt]s)?$/,
     replacement: fileURLToPath(new URL("navigationBackend.ts", import.meta.url)) }] },
   server: { host: "127.0.0.1", port: 0 },
 });
@@ -46,7 +46,7 @@ try {
   const functionButtons = functionBar.getByRole("button");
   assert.deepEqual(await functionButtons.allTextContents(), ["F3Просмотр", "F4Правка", "F5Копировать",
     "F6Переместить", "F7Каталог", "F8Удалить"]);
-  for (let index = 0; index < 6; index++) assert.equal(await functionButtons.nth(index).isDisabled(), true);
+  for (const index of [0, 1, 2, 3, 5]) assert.equal(await functionButtons.nth(index).isDisabled(), true);
   await page.setViewportSize({ width: 600, height: 900 });
   const compactBar = await functionBar.evaluate(element => ({ clientWidth: element.clientWidth,
     scrollWidth: element.scrollWidth, buttonWidths: [...element.querySelectorAll("button")].map(button => button.getBoundingClientRect().width) }));
@@ -63,6 +63,42 @@ try {
     "disabled shortcut does not dispatch a command");
   assert.equal(await page.getByRole("alert").count(), 0, "disabled shortcut reports no fake result or error");
   await path("left", home); await path("right", home);
+  const operationsButton = page.getByRole("button", { name: "Операции" });
+  await operationsButton.click();
+  const operationsDialog = page.getByRole("dialog", { name: "Файловые операции" });
+  await operationsDialog.getByText("Операций пока нет.").waitFor();
+  await cell("left", "..").click(); await focused("left", "..");
+  await operationsDialog.getByRole("button", { name: "Закрыть операции" }).click();
+  await operationsDialog.waitFor({ state: "hidden" });
+  await page.evaluate(() => { window.navigationTest.operations = [{ operationId: "test-operation", type: "file.copy",
+    state: "waiting-for-user", updateVersion: 2, createdAt: "2026-01-01T00:00:00Z", finishedAt: null, error: null,
+    context: { activePanel: "left", sources: [], sourceDirectory: "", destinationDirectory: null, parametersJSON: "{}" },
+    progress: { processedFiles: 0, totalFiles: 1, processedBytes: 0, totalBytes: 10, currentFile: "отчёт.txt" },
+    pendingConflict: { operationId: "test-operation", conflictId: "conflict-1", revision: 2, type: "file/file",
+      source: { path: "/source/отчёт.txt", kind: "file", size: 10, modifiedAt: "2026-01-01T00:00:00Z" },
+      destination: { path: "/target/отчёт.txt", kind: "file", size: 20, modifiedAt: "2026-01-02T00:00:00Z" },
+      allowedActions: ["replace", "skip", "keep-both", "cancel-operation"] } }]; });
+  await operationsButton.click();
+  const conflictDialog = page.getByRole("dialog", { name: "Файл уже существует" });
+  await conflictDialog.getByText("/source/отчёт.txt").waitFor();
+  await conflictDialog.getByText("/target/отчёт.txt").waitFor();
+  await page.keyboard.press("Escape");
+  await conflictDialog.waitFor({ state: "hidden" });
+  assert.equal(await page.evaluate(() => window.navigationTest.operations[0].state), "waiting-for-user",
+    "Escape leaves the backend conflict pending");
+  await operationsDialog.getByRole("button", { name: "Разрешить конфликт" }).click();
+  await conflictDialog.getByRole("radio", { name: "Пропустить источник" }).check();
+  await conflictDialog.getByRole("checkbox", { name: /Применить ко всем совместимым/ }).check();
+  await conflictDialog.getByRole("button", { name: "Применить" }).click();
+  await conflictDialog.waitFor({ state: "hidden" });
+  assert.deepEqual(await page.evaluate(() => window.navigationTest.conflictResolutions.at(-1)), {
+    operationId: "test-operation", conflictId: "conflict-1", revision: 2, action: "skip", applyToAll: true, customTargetPath: "",
+  });
+  await operationsDialog.getByRole("button", { name: "Закрыть операции" }).click();
+  await operationsDialog.waitFor({ state: "hidden" });
+  await cell("left", "..").click(); await focused("left", "..");
+  const mkdirButton = functionBar.getByRole("button", { name: /F7.*Каталог/ });
+  assert.equal(await mkdirButton.isDisabled(), false, "F7 becomes available after the source directory loads");
   assert.equal(await panel("left").getByText(/^Левая панель:/).count(), 0);
   assert.equal(await panel("right").getByText(/^Правая панель:/).count(), 0);
   const commandInput = commandForm.getByRole("textbox", { name: "Команда" });
@@ -106,8 +142,18 @@ try {
   await commandInput.fill("cd $(pwd)"); await commandInput.press("Enter");
   await page.getByText("Подстановки и операторы shell в cd не поддерживаются.").waitFor();
   assert.equal(await page.evaluate(() => window.navigationTest.reads.length), safeReads, "shell syntax never reaches directory reader");
-  await commandInput.fill("cdrom /tmp"); await commandInput.press("Enter");
-  await page.getByText("Выполнение внешних команд пока не поддерживается.").waitFor();
+  const beforeTerminal = await page.evaluate(() => window.navigationTest.opens.length);
+  await commandInput.fill("cdrom /tmp");
+  assert.equal(await page.evaluate(() => window.navigationTest.opens.length), beforeTerminal, "typing never executes");
+  await commandInput.press("Enter");
+  await page.waitForFunction(n => window.navigationTest.opens.length === n + 1, beforeTerminal);
+  const terminalRequest = await page.evaluate(() => window.navigationTest.opens.at(-1));
+  assert.equal(terminalRequest.type, "terminal.run", "Enter launches terminal, never opens panel entry");
+  assert.equal(terminalRequest.params.command, "cdrom /tmp");
+  assert.equal(terminalRequest.context.activePanel, "left");
+  assert.equal(terminalRequest.context.left.directoryLocation, home);
+  await commandInput.press("Enter");
+  assert.equal(await page.evaluate(() => window.navigationTest.opens.length), beforeTerminal + 1, "empty Enter does nothing");
   assert.equal(await page.evaluate(() => window.navigationTest.reads.length), safeReads, "cdrom is not parsed as cd");
   await commandInput.press("ArrowUp"); assert.equal(await commandInput.inputValue(), "cdrom /tmp");
   await commandInput.press("ArrowUp"); assert.equal(await commandInput.inputValue(), "cd $(pwd)");
@@ -275,8 +321,116 @@ try {
   await focused("right", `${home}/one.txt`); await count("right", 1);
   await page.waitForFunction(home => document.querySelector('form[aria-label="Командная строка"] p')?.textContent === `${home} >`, home);
   assert.equal(await panel("right").locator(`.ag-row[row-id="${home}/one.txt"]`).getAttribute("aria-selected"), "true");
+
+  // F5 and its button share file.copy and preserve the panel snapshot while
+  // collecting an editable local destination.
+  const copyButton = functionBar.getByRole("button", { name: /F5.*Копировать/ });
+  assert.equal(await copyButton.isDisabled(), false, "F5 is available for the selected source");
+  const defaultCopyDestination = await pathButton("left").getAttribute("title");
+  await page.keyboard.press("F5");
+  const copyDialog = page.getByRole("dialog", { name: "Копировать" });
+  await copyDialog.getByText("Источники: 1").waitFor();
+  await copyDialog.getByText("one.txt", { exact: true }).waitFor();
+  const copyDestination = copyDialog.getByRole("textbox", { name: "Каталог назначения" });
+  assert.equal(await copyDestination.inputValue(), defaultCopyDestination);
+  await copyDestination.fill("/tmp/Копия с пробелами");
+  await copyDestination.press("Enter");
+  await copyDialog.waitFor({ state: "hidden" });
+  const copyRequest = await page.evaluate(() => window.navigationTest.opens.filter(request => request.type === "file.copy").at(-1));
+  assert.equal(copyRequest.context.activePanel, "right");
+  assert.deepEqual(copyRequest.context.right.selectedLocations, [`${home}/one.txt`]);
+  assert.equal(copyRequest.params.destination, "/tmp/Копия с пробелами");
+
+  // F7 and its button share file.mkdir. The modal owns text keys, keeps the
+  // captured destination, reports backend errors in place and refreshes only
+  // the source panel with the created directory under the cursor.
+  const openMkdir = async viaKeyboard => {
+    if (viaKeyboard) await page.keyboard.press("F7"); else await mkdirButton.click();
+    const dialog = page.getByRole("dialog", { name: "Создать каталог" });
+    await dialog.waitFor();
+    const input = dialog.getByRole("textbox", { name: "Имя нового каталога" });
+    await page.waitForFunction(() => document.activeElement instanceof HTMLInputElement &&
+      !!document.activeElement.closest('[role="dialog"]'));
+    assert.equal(await input.evaluate(element => element === document.activeElement), true, "mkdir name receives focus");
+    assert.match(await dialog.textContent(), new RegExp(`Каталог назначения: ${home}`));
+    return { dialog, input };
+  };
+  let mkdir = await openMkdir(true);
+  assert.equal(await mkdir.dialog.getByRole("button", { name: "Создать" }).isDisabled(), true);
+  await page.evaluate(() => { window.navigationTest.holdMkdir = true; });
+  await mkdir.input.fill("Создан F7 🦊"); await mkdir.input.press("Enter");
+  const mkdirRequests = await page.evaluate(() => window.navigationTest.opens.filter(request => request.type === "file.mkdir").length);
+  assert.equal(await mkdir.dialog.getByRole("button", { name: "Создать" }).isDisabled(), true, "confirmation is disabled while mkdir runs");
+  assert.equal(await mkdir.dialog.getByRole("button", { name: "Отмена" }).isDisabled(), true, "cancellation is disabled while mkdir runs");
+  await page.keyboard.press("Enter");
+  assert.equal(await page.evaluate(() => window.navigationTest.opens.filter(request => request.type === "file.mkdir").length), mkdirRequests,
+    "Enter cannot submit mkdir twice while it is running");
+  await page.evaluate(() => { window.navigationTest.holdMkdir = false; window.navigationTest.releaseMkdir?.(); });
+  await mkdir.dialog.waitFor({ state: "hidden" });
+  await cell("right", `${home}/Создан F7 🦊`).waitFor(); await focused("right", `${home}/Создан F7 🦊`); await count("right", 1);
+  assert.equal(await cell("left", `${home}/Создан F7 🦊`).count(), 0, "mkdir refreshes only the source panel");
+  assert.deepEqual(await page.evaluate(() => window.navigationTest.mkdirs.at(-1)), { parent: home, name: "Создан F7 🦊" });
+
+  const mkdirCount = await page.evaluate(() => window.navigationTest.mkdirs.length);
+  mkdir = await openMkdir(false);
+  await mkdir.input.fill("Отменён"); await mkdir.input.press("Escape");
+  await mkdir.dialog.waitFor({ state: "hidden" });
+  assert.equal(await page.evaluate(() => window.navigationTest.mkdirs.length), mkdirCount, "Escape creates nothing");
+
+  mkdir = await openMkdir(false);
+  await mkdir.input.fill("Создан F7 🦊"); await mkdir.input.press("Enter");
+  await mkdir.dialog.getByText("Каталог «Создан F7 🦊» уже существует.").waitFor();
+  assert.equal(await mkdir.dialog.isVisible(), true, "backend error keeps mkdir dialog open");
+  await mkdir.input.fill("Создан кнопкой"); await mkdir.input.press("Enter");
+  await mkdir.dialog.waitFor({ state: "hidden" });
+  await cell("right", `${home}/Создан кнопкой`).waitFor(); await focused("right", `${home}/Создан кнопкой`);
+  assert.deepEqual(await page.evaluate(() => window.navigationTest.mkdirs.at(-1)), { parent: home, name: "Создан кнопкой" });
+  // F8 confirmation uses the same production handler as the bottom button.
+  await page.goto(server.resolvedUrls.local[0]);
+  await path("left", home); await path("right", home);
+  await cell("left", "..").click();
+  assert.equal(await functionButtons.nth(5).isDisabled(), true, "parent is never a trash source");
+  await cell("left", `${home}/one.txt`).click();
+  await page.keyboard.press("F8");
+  const trashDialog = page.getByRole("dialog", { name: "Переместить в корзину?" });
+  await trashDialog.waitFor();
+  await trashDialog.getByText("one.txt", { exact: true }).waitFor();
+  assert.equal(await page.evaluate(() => window.navigationTest.trashed.size), 0, "preview is read-only");
+  await page.keyboard.press("Escape"); await trashDialog.waitFor({ state: "hidden" });
+  assert.equal(await page.evaluate(() => window.navigationTest.trashed.size), 0, "Escape does not trash");
+  await functionButtons.nth(5).click(); await trashDialog.waitFor();
+  await trashDialog.getByRole("button", { name: "Отмена", exact: true }).click();
+  await trashDialog.waitFor({ state: "hidden" });
+  await cell("left", `${home}/child`).click({ modifiers: ["Control"] });
+  await functionButtons.nth(5).click(); await trashDialog.waitFor();
+  await trashDialog.getByText("Объектов: 2", { exact: true }).waitFor();
+  await trashDialog.getByText("child — каталог целиком, включая содержимое", { exact: true }).waitFor();
+  await trashDialog.getByText(`Исходный каталог: ${home}`, { exact: true }).waitFor();
+  await trashDialog.getByRole("button", { name: "Переместить в корзину", exact: true }).click();
+  await trashDialog.waitFor({ state: "hidden" });
+  await cell("right", `${home}/two.txt`).click();
+  await page.getByRole("button", { name: /^Операции/ }).click();
+  const trashOperations = page.getByRole("dialog", { name: "Файловые операции" });
+  await trashOperations.getByText("В корзине: 2 / 2", { exact: true }).waitFor();
+  assert.equal(await trashOperations.getByText(/Данные:/).count(), 0, "trash has no invented byte progress");
+  await cell("left", `${home}/one.txt`).waitFor({ state: "hidden" });
+  await cell("right", `${home}/one.txt`).waitFor({ state: "hidden" });
+  await path("left", home); await path("right", home);
+  const trashCalls = await page.evaluate(() => window.navigationTest.opens.filter(r => r.type === "file.trash"));
+  assert.equal(trashCalls.length, 1, "confirmation submits exactly once");
+  assert.equal(trashCalls[0].context.activePanel, "left");
+  assert.deepEqual(trashCalls[0].params.entries.map(e => e.name).sort(), ["child", "one.txt"]);
+  await trashOperations.getByRole("button", { name: "Закрыть операции" }).click();
+  await page.getByRole("button", { name: /^Операции/ }).click();
+  await trashOperations.getByText("В корзине: 2 / 2", { exact: true }).waitFor();
+  await page.evaluate(() => {
+    const op = window.navigationTest.operations[0]; op.state = "cancelled"; op.updateVersion++;
+    op.progress.totalFiles = 5;
+  });
+  await trashOperations.getByRole("button", { name: "Обновить операции" }).click();
+  await trashOperations.getByRole("alert").getByText(/В корзине: 2 из 5/).waitFor();
   assert.deepEqual(errors, []);
-  console.log("PASS: real AG Grid navigation, cursor, Ctrl/Shift selection, Tab, root, permission errors and async focus");
+  console.log("PASS: navigation, focus, F4/F5/F6/F7, command line and F8 trash confirmation/results");
 } finally {
   await browser?.close();
   await server.close();

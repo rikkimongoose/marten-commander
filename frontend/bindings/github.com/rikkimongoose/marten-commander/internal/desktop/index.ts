@@ -3,10 +3,12 @@
 
 import * as CommandService from "./commandservice.js";
 import * as DirectoryService from "./directoryservice.js";
+import * as OperationService from "./operationservice.js";
 import * as VolumeService from "./volumeservice.js";
 export {
     CommandService,
     DirectoryService,
+    OperationService,
     VolumeService
 };
 
@@ -18,6 +20,8 @@ export type {
     Entry,
     HomeDirectory,
     PanelContext,
+    TrashEntry,
+    TrashPreview,
     Volume,
     VolumeSpace
 } from "./models.js";

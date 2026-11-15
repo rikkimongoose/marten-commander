@@ -5,8 +5,10 @@ const entry = (id: string, directory = false) => ({ id, name: id.split("/").at(-
   extension: directory ? "" : "txt", size: directory ? "" : "5", modifiedAt: "2026-01-01T00:00:00.000000000Z", detail: "" });
 const home = "/home/test";
 const initialRoot = new URLSearchParams(window.location.search).has("emptyRoot");
-const state = { reads: [] as string[], opens: [] as any[], openError: "", hold: "",
-  release: undefined as (() => void) | undefined, emptyRoot: initialRoot };
+const state = { trashed: new Set<string>(), previews: [] as any[], reads: [] as string[], opens: [] as any[], openError: "", hold: "",
+  release: undefined as (() => void) | undefined, emptyRoot: initialRoot,
+  mkdirs: [] as { parent: string; name: string }[], created: new Map<string, string[]>(), holdMkdir: false,
+  releaseMkdir: undefined as (() => void) | undefined, operations: [] as any[], conflictResolutions: [] as any[] };
 Object.assign(window, { navigationTest: state });
 
 function resolve(path: string, base: string) {
@@ -32,7 +34,8 @@ export async function ReadDirectory(request: { path: string; location: string; b
     : path === "/home" ? [entry(home, true)]
     : path === "/" && !state.emptyRoot ? [entry("/home", true)]
     : path === `${home}/child` ? [entry(`${path}/nested`, true), entry(`${path}/inside.txt`)] : [];
-  return { location: path, parentLocation: parent, displayPath: path, entries,
+  entries.push(...(state.created.get(path) ?? []).map(name => entry(`${path}/${name}`, true)));
+  return { location: path, parentLocation: parent, displayPath: path, entries: entries.filter(item => !state.trashed.has(item.id)),
     initialHome: !initialRoot && !request.path && !request.location, ancestorLocations: path.startsWith(home + "/") ? [home, "/home", "/"] : [parent] };
 }
 
@@ -42,9 +45,56 @@ export async function GetVolumeInfo() {
     space: { total: "1000", free: "400", available: "400", used: "600" } };
 }
 export async function ListVolumes() { return [await GetVolumeInfo()]; }
+export async function ListOperations() { return state.operations; }
+export async function CancelOperation() { throw new Error("Test operation not found"); }
+export async function ResolveConflict(resolution: any) {
+  state.conflictResolutions.push(resolution);
+  const operation = state.operations.find(value => value.operationId === resolution.operationId);
+  if (!operation || operation.pendingConflict?.conflictId !== resolution.conflictId ||
+    operation.pendingConflict.revision !== resolution.revision) throw new Error("Устаревший конфликт");
+  operation.state = resolution.action === "cancel-operation" ? "cancelled" : "running";
+  operation.pendingConflict = null;
+  operation.updateVersion++;
+  return operation;
+}
 export async function ExecuteCommand(request: any) {
   state.opens.push(request);
+  if (request.type === "file.trash") {
+    const source = request.context[request.context.activePanel];
+    const sources = request.params.entries.map((e: any) => e.location);
+    for (const path of sources) state.trashed.add(path);
+    state.operations.push({ operationId: "trash-operation", type: "file.trash", state: "completed", updateVersion: 3,
+      createdAt: new Date().toISOString(), finishedAt: new Date().toISOString(), error: null, pendingConflict: null,
+      progress: { processedFiles: sources.length, totalFiles: sources.length, processedBytes: 0, totalBytes: null, currentFile: "" },
+      context: { activePanel: request.context.activePanel, sources, sourceDirectory: source.directoryLocation,
+        destinationDirectory: null, parametersJSON: JSON.stringify(request.params) } });
+    return;
+  }
+  if (request.type === "file.mkdir") {
+    if (state.holdMkdir) await new Promise<void>(resolve => { state.releaseMkdir = resolve; });
+    const panel = request.context[request.context.activePanel];
+    const parent = panel.directoryLocation;
+    const name = request.params.name;
+    const names = state.created.get(parent) ?? [];
+    if (names.includes(name)) throw new Error("Wails command failed", {
+      cause: { code: "mkdir_failed", message: `Каталог «${name}» уже существует.` },
+    });
+    names.push(name);
+    state.created.set(parent, names);
+    state.mkdirs.push({ parent, name });
+    return;
+  }
   if (state.openError) throw new Error("Wails command failed", {
     cause: { code: "open_failed", message: state.openError },
   });
+}
+
+export async function PrepareTrash(context: any) {
+ state.previews.push(context);
+ const panel = context[context.activePanel];
+ const locations = panel.selectedLocations.length ? panel.selectedLocations : [panel.focusedLocation];
+ return { directory: panel.directoryLocation, entries: locations.map((location: string) => ({
+  location, name: location.split("/").at(-1), revision: "identity",
+  kind: location.endsWith("/child") ? "directory" : "file",
+ })) };
 }

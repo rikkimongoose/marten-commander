@@ -40,7 +40,7 @@ export function parseCommandLine(input: string): ParsedCommand {
   if (command === "") return { kind: "empty" };
   const separator = command.search(/\s/);
   const name = separator < 0 ? command : command.slice(0, separator);
-  if (name !== "cd") return { kind: "external", command };
+  if (name !== "cd") return { kind: "external", command: input };
   const argument = separator < 0 ? "" : command.slice(separator).trim();
   return argument === "" ? { kind: "home" } : parsePath(argument);
 }
