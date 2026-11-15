@@ -1,4 +1,4 @@
-# Marten Commander v0.1.0 — Linux amd64
+# Marten Commander v0.2.0 — Linux amd64
 
 Этот архив содержит production-бинарник Marten Commander для Linux amd64. Фронтенд
 встроен в executable; Vite dev server и исходники проекта для запуска не нужны.
@@ -9,7 +9,7 @@
 
 ```sh
 sudo apt update
-sudo apt install libgtk-4-1 libwebkitgtk-6.0-4
+sudo apt install libgtk-4-1 libwebkitgtk-6.0-4 libglib2.0-bin
 ```
 
 Для локальной сборки дополнительно нужны `build-essential`, `pkg-config`,
@@ -27,18 +27,18 @@ ldd ./marten-commander
 ## Скачивание и запуск
 
 1. Откройте вкладку **Actions** репозитория и успешный запуск workflow **Linux build**.
-2. В разделе **Artifacts** скачайте `marten-commander-v0.1.0-linux-amd64`.
+2. В разделе **Artifacts** скачайте `marten-commander-v0.2.0-linux-amd64`.
 3. Распакуйте внешнюю ZIP-обёртку GitHub Actions. В ней находятся tar.gz и файл SHA-256.
 4. В каталоге с обоими файлами проверьте и распакуйте архив:
 
 ```sh
-sha256sum --check marten-commander-v0.1.0-linux-amd64.tar.gz.sha256
-tar -xzf marten-commander-v0.1.0-linux-amd64.tar.gz
-cd marten-commander-v0.1.0-linux-amd64
+sha256sum --check marten-commander-v0.2.0-linux-amd64.tar.gz.sha256
+tar -xzf marten-commander-v0.2.0-linux-amd64.tar.gz
+cd marten-commander-v0.2.0-linux-amd64
 ./marten-commander
 ```
 
-Actions Artifact — временный результат CI, а не публичный GitHub Release. Для v0.1.0
+Actions Artifact — временный результат CI, а не публичный GitHub Release. Для v0.2.0
 workflow хранит его 21 день и не создаёт тег или Release.
 
 ## Ручная smoke-проверка
@@ -51,7 +51,12 @@ workflow хранит его 21 день и не создаёт тег или Re
 - [ ] Ctrl/Shift создают множественное выделение, не смешивая его с текущей строкой.
 - [ ] Обычный файл открывается через назначенное системное приложение.
 - [ ] `cd ..`, абсолютный/относительный путь, quoted path и `cd ~/...` работают в командной строке.
-- [ ] F3–F8 видимы и отключены, пока их операции не реализованы.
+- [ ] F4 открывает файл во внешнем редакторе; F5/F6/F7 выполняют копирование,
+      перемещение/переименование и создание каталога.
+- [ ] F8 требует подтверждение, переносит тестовые объекты в системную корзину и
+      позволяет восстановить их средствами файлового менеджера ОС.
+- [ ] F3 видима, но Viewer ещё не реализован.
+- [ ] Внешняя команда запускается в системном терминале, а `cd` остаётся встроенной.
 - [ ] Отказ в доступе показывает ошибку и сохраняет последний успешно открытый каталог.
 - [ ] Интерфейс остаётся доступным после изменения размера окна.
 

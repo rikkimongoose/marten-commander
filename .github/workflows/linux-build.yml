@@ -15,8 +15,9 @@ env:
   NODE_VERSION: 24
   WAILS_VERSION: v3.0.0
   BINARY_PATH: bin/marten-commander
-  ARCHIVE_STEM: marten-commander-v0.1.0-linux-amd64
-  ARCHIVE_NAME: marten-commander-v0.1.0-linux-amd64.tar.gz
+  RELEASE_VERSION: v0.2.0
+  ARCHIVE_STEM: marten-commander-v0.2.0-linux-amd64
+  ARCHIVE_NAME: marten-commander-v0.2.0-linux-amd64.tar.gz
 
 jobs:
   build:
@@ -79,6 +80,12 @@ jobs:
       - name: Run Go tests
         run: go test ./...
 
+      - name: Run Go tests with race detector
+        run: go test -race ./...
+
+      - name: Run go vet
+        run: go vet ./...
+
       - name: Reject a development-server reference
         run: |
           if grep --recursive --line-number --fixed-strings "localhost:9245" frontend/dist; then
@@ -91,6 +98,14 @@ jobs:
 
       - name: Verify dependency manifests are unchanged
         run: git diff --exit-code -- go.mod go.sum frontend/package.json frontend/package-lock.json
+
+      - name: Verify release version
+        run: |
+          configured_version="v$(sed -n 's/^  version: "\([^"]*\)".*/\1/p' build/config.yml)"
+          if [ "${configured_version}" != "${RELEASE_VERSION}" ]; then
+            echo "::error file=build/config.yml::Expected ${RELEASE_VERSION}, got ${configured_version}"
+            exit 1
+          fi
 
       - name: Verify binary and print diagnostics
         run: |

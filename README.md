@@ -1,8 +1,8 @@
 # Marten Commander
 
 Двухпанельный файловый менеджер на Go, Wails 3, React, MUI и AG Grid.
-Текущая версия MVP — 0.1.0: чтение локальных каталогов, независимые файловые
-панели, навигация и открытие файлов системным приложением.
+Текущая версия — 0.2.0: безопасные базовые файловые операции, внешние редактор
+и терминал, а также две независимые локальные файловые панели.
 
 ## Возможности текущего этапа
 
@@ -37,9 +37,9 @@
   удаляет только действительно опустевшие исходные каталоги.
 - Защита от устаревших ответов; ошибка оставляет последний успешный снимок.
 
-Наблюдение за каталогами, удаление, встроенные редактор
-и просмотрщик, «Открыть с помощью» и экран настроек ещё не реализованы. Изменения файловой
-системы появляются после ручного обновления.
+Наблюдение за каталогами, встроенный F3 Viewer, встроенный редактор,
+«Открыть с помощью» и экран настроек ещё не реализованы. Изменения файловой
+системы вне фоновых операций появляются после ручного обновления.
 
 ## Внешний редактор F4
 
@@ -61,13 +61,14 @@ MARTEN_COMMANDER_EDITOR_ARGUMENTS='["--reuse-window", "{file}"]' \
 Изменение применяется при следующем запуске приложения. Команда запускается напрямую,
 без shell: подстановки shell в пути, имени программы и аргументах не выполняются.
 
-## Linux release candidate 0.1.0
+## Linux release candidate 0.2.0
 
 Workflow [`.github/workflows/linux-build.yml`](.github/workflows/linux-build.yml)
-на `ubuntu-24.04` запускает Go- и frontend-тесты, TypeScript typecheck, production
-frontend build и штатную задачу `wails3 build GOOS=linux GOARCH=amd64`. После
+на `ubuntu-24.04` запускает Go- и frontend-тесты, race detector, `go vet`,
+TypeScript typecheck, production frontend build и штатную задачу
+`wails3 build GOOS=linux GOARCH=amd64`. После
 успешной проверки он публикует Actions Artifact
-`marten-commander-v0.1.0-linux-amd64` с tar.gz и отдельной SHA-256 суммой.
+`marten-commander-v0.2.0-linux-amd64` с tar.gz и отдельной SHA-256 суммой.
 
 Артефакт скачивается со страницы конкретного запуска во вкладке **Actions**. GitHub
 помещает tar.gz и checksum во внешнюю ZIP-обёртку. Это временный CI-артефакт, а не
@@ -77,7 +78,7 @@ GitHub Release; workflow не создаёт тег или Release.
 
 ```sh
 sudo apt update
-sudo apt install libgtk-4-1 libwebkitgtk-6.0-4
+sudo apt install libgtk-4-1 libwebkitgtk-6.0-4 libglib2.0-bin
 ```
 
 Подробные команды проверки, распаковки и запуска, а также ручной smoke checklist:
