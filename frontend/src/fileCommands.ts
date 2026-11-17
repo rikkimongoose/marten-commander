@@ -1,6 +1,7 @@
 import { createCommandBackend } from "./commandBackend.ts";
 import { CANCEL_COMMAND, CommandError, commandErrorMessage, effectiveSelection, sourceAndTarget, type CommandContext,
   type CommandDispatcher, type CommandRequest, type JsonObject } from "./commands.ts";
+import type { ViewerFile } from "../bindings/github.com/rikkimongoose/marten-commander/internal/desktop/models.ts";
 
 type ExecuteFileCommand = (request: CommandRequest) => void | PromiseLike<void>;
 export type MkdirPromptResult = { readonly name: string } | typeof CANCEL_COMMAND;
@@ -68,6 +69,8 @@ export function registerFileCommands(
   mkdir?: MkdirActions,
   copy?: CopyActions,
   move?: MoveActions,
+  openViewer?: (location: string) => PromiseLike<ViewerFile>,
+  showViewer?: (file: ViewerFile) => void,
 ) {
   dispatcher.register("file.open", {
     available: context => sourceAndTarget(context).source.directoryLocation === null
@@ -93,6 +96,20 @@ export function registerFileCommands(
       return { location: source.focusedLocation };
     },
     execute: request => executeBackend(request),
+  });
+  dispatcher.register("file.view", {
+    available: context => {
+      const source = sourceAndTarget(context).source;
+      return source.focusedViewLocation
+        ? { enabled: true } : { enabled: false, reason: "Установите курсор на файл." };
+    },
+    execute: async request => {
+      const source = sourceAndTarget(request.context).source;
+      if (!source.focusedViewLocation) throw new CommandError("unavailable", "Установите курсор на файл.");
+      const open = openViewer ?? (await import("../bindings/github.com/rikkimongoose/marten-commander/internal/desktop/viewerservice")).OpenFile;
+      const file = await open(source.focusedViewLocation);
+      showViewer?.(file);
+    },
   });
   if (mkdir) dispatcher.register("file.mkdir", {
     available: context => sourceAndTarget(context).source.directoryLocation === null

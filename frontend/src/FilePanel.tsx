@@ -123,6 +123,10 @@ export const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(function Fi
       selectedLocations: api.current?.getSelectedNodes().flatMap(node => fileLocation(node.data) ? [node.data!.id] : []) ?? [],
       focusedLocation: current.current ? fileLocation(api.current?.getRowNode(current.current)?.data) : null,
       focusedKind: current.current ? focusedKind(api.current?.getRowNode(current.current)?.data) : null,
+      focusedViewLocation: (() => {
+        const row = current.current ? api.current?.getRowNode(current.current)?.data : undefined;
+        return row && (row.kind === "file" || row.kind === "symlink" && !row.navigable) ? row.id : null;
+      })(),
     }),
     selectAll: () => {
       if (!api.current || api.current.isDestroyed()) throw new CommandError("unavailable", "Таблица недоступна.");

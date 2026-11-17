@@ -95,6 +95,34 @@ export interface TrashPreview {
     "entries": TrashEntry[] | null;
 }
 
+export interface ViewerChunk {
+    "offset": string;
+    "dataBase64": string;
+    "length": number;
+    "eof": boolean;
+}
+
+export interface ViewerFile {
+    "id": string;
+    "name": string;
+    "path": string;
+    "size": string;
+    "modifiedAt": string;
+    "initialMode": string;
+    "encoding": string;
+    "encodingSource": string;
+}
+
+export interface ViewerTextChunk {
+    "startOffset": string;
+    "nextOffset": string;
+    "text": string;
+    "eof": boolean;
+    "encoding": string;
+    "encodingSource": string;
+    "auto": boolean;
+}
+
 export interface Volume {
     "id": string;
     "name": string;

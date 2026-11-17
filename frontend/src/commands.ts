@@ -10,6 +10,8 @@ export interface PanelContext {
   readonly selectedLocations: readonly string[];
   readonly focusedLocation: string | null;
   readonly focusedKind?: "file" | "directory" | "symlink" | "other" | null;
+  /** Cursor location only when F3 may address a regular file or file symlink. */
+  readonly focusedViewLocation?: string | null;
 }
 
 export interface CommandContext {
@@ -28,7 +30,9 @@ export interface CommandRequest {
 }
 
 export type CommandErrorCode = "unknown_command" | "duplicate_command" | "unavailable" |
-  "invalid_context" | "invalid_request" | "invalid_params" | "open_failed" | "edit_failed" | "mkdir_failed" | "copy_failed" | "move_failed" | "handler_failed" | "terminal_failed" | "trash_failed";
+  "invalid_context" | "invalid_request" | "invalid_params" | "open_failed" | "edit_failed" | "mkdir_failed" | "copy_failed" | "move_failed" |
+  "viewer_failed" | "viewer_closed" | "invalid_offset" | "invalid_length" | "close_failed" |
+  "handler_failed" | "terminal_failed" | "trash_failed";
 
 export class CommandError extends Error {
   readonly code: CommandErrorCode;
@@ -65,6 +69,7 @@ export function snapshotContext(context: CommandContext): CommandContext {
       (value.focusedLocation !== null && typeof value.focusedLocation !== "string") ||
       (value.focusedKind !== undefined && value.focusedKind !== null &&
         !["file", "directory", "symlink", "other"].includes(value.focusedKind)) ||
+      (value.focusedViewLocation !== undefined && value.focusedViewLocation !== null && typeof value.focusedViewLocation !== "string") ||
       !Array.isArray(value.selectedLocations) || value.selectedLocations.some(id => typeof id !== "string")) {
       throw new CommandError("invalid_context", "Некорректный контекст панели.");
     }
@@ -73,6 +78,7 @@ export function snapshotContext(context: CommandContext): CommandContext {
       selectedLocations: Object.freeze([...value.selectedLocations]),
       focusedLocation: value.focusedLocation,
       ...(value.focusedKind !== undefined ? { focusedKind: value.focusedKind } : {}),
+      ...(value.focusedViewLocation !== undefined ? { focusedViewLocation: value.focusedViewLocation } : {}),
     });
   };
   if (!context || (context.activePanel !== "left" && context.activePanel !== "right")) {

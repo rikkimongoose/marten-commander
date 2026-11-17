@@ -241,3 +241,40 @@ test("file.move shortcut preparation cancels without backend and falls back to c
   assert.equal(await dispatcher.dispatch("file.move"), "cancelled");
   assert.equal(calls, 0);
 });
+
+test("file.view opens only the focused regular file and preserves the captured context", async () => {
+  const focused = location("/left/current.txt");
+  const context = {
+    activePanel: "left",
+    left: { directoryLocation: location("/left"), selectedLocations: [location("/left/other.txt")],
+      focusedLocation: focused, focusedKind: "file", focusedViewLocation: focused },
+    right: { directoryLocation: location("/right"), selectedLocations: [], focusedLocation: null, focusedKind: null },
+  };
+  let opened, shown;
+  const dispatcher = new CommandDispatcher(() => context, () => "view-1");
+  registerFileCommands(dispatcher, () => {}, undefined, undefined, undefined, async value => {
+    opened = value;
+    context.left.focusedLocation = location("/left/later.txt");
+    context.left.focusedViewLocation = location("/left/later.txt");
+    return { id: "session", name: "current.txt", path: "/left/current.txt", size: "1",
+      modifiedAt: "", initialMode: "text" };
+  }, file => { shown = file; });
+  assert.equal(dispatcher.availability("file.view").enabled, true);
+  await dispatcher.dispatch("file.view");
+  assert.equal(opened, focused);
+  assert.equal(shown.path, "/left/current.txt");
+});
+
+test("file.view is unavailable for directories, directory symlinks and special files", async () => {
+  for (const focusedKind of [null, "directory", "symlink", "other"]) {
+    const context = { activePanel: "left",
+      left: { directoryLocation: location("/left"), selectedLocations: [], focusedLocation: location("/left/item"),
+        focusedKind, focusedViewLocation: null },
+      right: { directoryLocation: location("/right"), selectedLocations: [], focusedLocation: null, focusedKind: null } };
+    const dispatcher = new CommandDispatcher(() => context);
+    registerFileCommands(dispatcher, () => {}, undefined, undefined, undefined,
+      async () => assert.fail("viewer backend must not run"));
+    assert.equal(dispatcher.availability("file.view").enabled, false);
+    await assert.rejects(dispatcher.dispatch("file.view"), error => error.code === "unavailable");
+  }
+});

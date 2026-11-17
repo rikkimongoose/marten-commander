@@ -10,6 +10,7 @@ import (
 	"github.com/rikkimongoose/marten-commander/internal/localfs"
 	"github.com/rikkimongoose/marten-commander/internal/operations"
 	"github.com/rikkimongoose/marten-commander/internal/settings"
+	"github.com/rikkimongoose/marten-commander/internal/viewer"
 	"github.com/rikkimongoose/marten-commander/internal/volumes"
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
@@ -47,6 +48,7 @@ func main() {
 		Services: []application.Service{
 			application.NewService(desktop.NewDirectoryService(directories, initialIsHome)),
 			application.NewService(desktop.NewCommandServiceWithTrash(files, editor, copyService, moveService, terminal, trashService)),
+			application.NewService(desktop.NewViewerService(viewer.LocalFileSource{})),
 			application.NewService(desktop.NewVolumeService(volumes.NewService())),
 			application.NewService(operationService),
 		},

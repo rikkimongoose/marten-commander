@@ -8,7 +8,7 @@ import react from "@vitejs/plugin-react";
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || "playwright-core");
 const server = await createServer({
   configFile: false, root: fileURLToPath(new URL("../../", import.meta.url)), plugins: [react()],
-  resolve: { alias: [{ find: /.*bindings\/.*\/desktop\/(commandservice|directoryservice|operationservice|volumeservice)(\.[jt]s)?$/,
+  resolve: { alias: [{ find: /.*bindings\/.*\/desktop\/(commandservice|directoryservice|operationservice|volumeservice|viewerservice)(\.[jt]s)?$/,
     replacement: fileURLToPath(new URL("navigationBackend.ts", import.meta.url)) }] },
   server: { host: "127.0.0.1", port: 0 },
 });
@@ -112,6 +112,24 @@ try {
   await commandInput.press("Tab");
   assert.equal(await panel("left").getAttribute("data-active"), "true", "Tab in command line does not switch panels");
   await focused("left", "..");
+
+  // Viewer keeps one bounded text window, switches encoding from original
+  // bytes and closes without disturbing the panels or v0.2 commands.
+  await cell("left", `${home}/one.txt`).click(); await page.keyboard.press("F3");
+  const viewer = page.getByRole("region", { name: "Просмотр файла" });
+  await viewer.getByLabel("Текст файла").waitFor();
+  assert.match(await viewer.textContent(), /Auto · UTF-8 · проверка UTF-8/);
+  assert.equal(await viewer.locator('pre[aria-label="Текст файла"]').count(), 1);
+  const viewerScroller = viewer.locator('[aria-label="Текст файла"]').locator("xpath=../..");
+  assert.ok(await viewerScroller.evaluate(element => element.scrollHeight > element.clientHeight), "large file has a virtual scrollbar");
+  await viewer.getByRole("combobox", { name: "Кодировка" }).click();
+  await page.getByRole("option", { name: "KOI8-R" }).click();
+  await viewer.getByText("текст KOI8-R").waitFor();
+  assert.match(await viewer.textContent(), /Вручную · KOI8-R · ручной выбор/);
+  await page.keyboard.press("Escape");
+  await viewer.waitFor({ state: "hidden" });
+  assert.equal(await page.evaluate(() => window.navigationTest.viewerClosed), 1);
+  await focused("left", `${home}/one.txt`);
 
   // Compact path header edits the panel path; Escape cancels and Enter uses
   // the same guarded panel loader.

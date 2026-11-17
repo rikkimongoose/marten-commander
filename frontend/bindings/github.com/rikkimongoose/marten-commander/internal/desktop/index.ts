@@ -4,11 +4,13 @@
 import * as CommandService from "./commandservice.js";
 import * as DirectoryService from "./directoryservice.js";
 import * as OperationService from "./operationservice.js";
+import * as ViewerService from "./viewerservice.js";
 import * as VolumeService from "./volumeservice.js";
 export {
     CommandService,
     DirectoryService,
     OperationService,
+    ViewerService,
     VolumeService
 };
 
@@ -22,6 +24,9 @@ export type {
     PanelContext,
     TrashEntry,
     TrashPreview,
+    ViewerChunk,
+    ViewerFile,
+    ViewerTextChunk,
     Volume,
     VolumeSpace
 } from "./models.js";

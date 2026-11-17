@@ -20,6 +20,9 @@ import { OperationsCenter } from "./OperationsCenter";
 import { CopyDialog } from "./CopyDialog";
 import type { Operation } from "../bindings/github.com/rikkimongoose/marten-commander/internal/operations/models";
 import { moveFocusCandidates, operationRefreshLocations } from "./operationRefresh";
+import { CloseFile, OpenFile } from "../bindings/github.com/rikkimongoose/marten-commander/internal/desktop/viewerservice";
+import type { ViewerFile } from "../bindings/github.com/rikkimongoose/marten-commander/internal/desktop/models";
+import { Viewer } from "./Viewer";
 
 type MkdirDialogState = { open: boolean; destination: string; busy: boolean; error: string };
 type CopyDialogState = { open: boolean; sources: string[]; destination: string; busy: boolean; error: string };
@@ -30,6 +33,8 @@ export default function App() {
   const left = useRef<FilePanelHandle>(null);
   const right = useRef<FilePanelHandle>(null);
   const [commandError, setCommandError] = useState("");
+  const [viewer, setViewer] = useState<ViewerFile>();
+  const viewerRef = useRef<ViewerFile>();
   const [mkdirDialog, setMkdirDialog] = useState<MkdirDialogState>({ open: false, destination: "", busy: false, error: "" });
   const mkdirResolve = useRef<((result: MkdirPromptResult) => void)>();
   const [copyDialog, setCopyDialog] = useState<CopyDialogState>({ open: false, sources: [], destination: "", busy: false, error: "" });
@@ -41,7 +46,7 @@ export default function App() {
   const [, setCommandContextVersion] = useState(0);
   const commandContextChanged = useCallback(() => setCommandContextVersion(version => version + 1), []);
   const [commands] = useState(() => {
-    const empty = () => ({ directoryLocation: null, selectedLocations: [], focusedLocation: null, focusedKind: null });
+    const empty = () => ({ directoryLocation: null, selectedLocations: [], focusedLocation: null, focusedKind: null, focusedViewLocation: null });
     const dispatcher = new CommandDispatcher(() => ({
       activePanel: activeRef.current,
       left: left.current?.getContext() ?? empty(),
@@ -88,6 +93,11 @@ export default function App() {
       prompt: { open: openCopyDialog, retry: retryCopyDialog, complete: closeCopyDialog },
     }, {
       prompt: { open: openMoveDialog, retry: retryMoveDialog, complete: closeMoveDialog },
+    }, OpenFile, file => {
+      const previous = viewerRef.current;
+      viewerRef.current = file;
+      setViewer(file);
+      if (previous) void CloseFile(previous.id);
     });
     return dispatcher;
   });
@@ -218,7 +228,7 @@ export default function App() {
   return (
     <AgGridProvider modules={[AllCommunityModule]}>
       <CssBaseline />
-      <Box sx={{ height: "100vh", display: "flex", flexDirection: "column", p: 1, gap: 1 }}>
+      <Box sx={{ height: "100vh", display: "flex", flexDirection: "column", p: 1, gap: 1, position: "relative" }}>
         {commandError && <Alert severity="error" onClose={() => setCommandError("")}>{commandError}</Alert>}
         <Box sx={{ display: "flex", flex: 1, minHeight: 0, gap: 1 }}>
           <FilePanel ref={left} label="Левая панель" active={active === "left"} activate={() => activate("left")}
@@ -244,6 +254,11 @@ export default function App() {
             ? "Новое имя переименует объект на месте. Существующий каталог переместит его без переименования; полный новый путь выполнит оба действия."
             : "Для нескольких объектов укажите абсолютный путь существующего каталога."}
           validateDestination={destination => moveDestinationError(destination, moveDialog.sources.length)} />
+        {viewer && <Viewer file={viewer} reportCloseError={setCommandError} close={() => {
+          viewerRef.current = undefined;
+          setViewer(undefined);
+          queueMicrotask(focusActivePanel);
+        }} />}
       </Box>
     </AgGridProvider>
   );

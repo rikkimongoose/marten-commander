@@ -8,7 +8,8 @@ const initialRoot = new URLSearchParams(window.location.search).has("emptyRoot")
 const state = { trashed: new Set<string>(), previews: [] as any[], reads: [] as string[], opens: [] as any[], openError: "", hold: "",
   release: undefined as (() => void) | undefined, emptyRoot: initialRoot,
   mkdirs: [] as { parent: string; name: string }[], created: new Map<string, string[]>(), holdMkdir: false,
-  releaseMkdir: undefined as (() => void) | undefined, operations: [] as any[], conflictResolutions: [] as any[] };
+  releaseMkdir: undefined as (() => void) | undefined, operations: [] as any[], conflictResolutions: [] as any[],
+  viewerReads: [] as string[], viewerClosed: 0 };
 Object.assign(window, { navigationTest: state });
 
 function resolve(path: string, base: string) {
@@ -88,6 +89,26 @@ export async function ExecuteCommand(request: any) {
     cause: { code: "open_failed", message: state.openError },
   });
 }
+
+function cancellable<T>(value: T) {
+  const result = Promise.resolve(value) as Promise<T> & { cancel: (reason?: string) => Promise<void> };
+  result.cancel = async () => {};
+  return result;
+}
+
+export function OpenFile() {
+  return cancellable({ id: "viewer-1", name: "one.txt", path: `${home}/one.txt`, size: "4294967296",
+    modifiedAt: "", initialMode: "text", encoding: "utf-8", encodingSource: "heuristic" });
+}
+export function ReadText(_id: string, offset: string, _length: number, encoding: string) {
+  state.viewerReads.push(encoding);
+  const actual = encoding === "auto" ? "utf-8" : encoding;
+  return cancellable({ startOffset: offset, nextOffset: (BigInt(offset) + 32n).toString(),
+    text: encoding === "koi8-r" ? "текст KOI8-R\n" : "UTF-8 текст\n", eof: false,
+    encoding: actual, encodingSource: encoding === "auto" ? "heuristic" : "manual", auto: encoding === "auto" });
+}
+export function ReadFile() { return cancellable({ offset: "0", dataBase64: "", length: 0, eof: true }); }
+export function CloseFile() { state.viewerClosed++; return cancellable(undefined); }
 
 export async function PrepareTrash(context: any) {
  state.previews.push(context);
