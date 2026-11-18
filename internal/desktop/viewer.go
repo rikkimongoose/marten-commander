@@ -50,10 +50,12 @@ type viewerSession struct {
 	file      viewer.File
 	size      int64
 	detection viewer.EncodingDetection
+	ctx       context.Context
+	cancel    context.CancelFunc
 }
 
 // ViewerService owns open handles. Every successful OpenFile must be paired
-// with CloseFile; Wails call contexts cancel individual range reads.
+// with CloseFile; call contexts and closing the session cancel range reads.
 type ViewerService struct {
 	source viewer.FileSource
 	mu     sync.RWMutex
@@ -93,7 +95,8 @@ func (s *ViewerService) OpenFile(ctx context.Context, location string) (ViewerFi
 	}
 	s.mu.Lock()
 	detection := viewer.DetectEncoding(sample)
-	s.files[id] = &viewerSession{file: f, size: meta.Size, detection: detection}
+	sessionCtx, cancel := context.WithCancel(context.Background())
+	s.files[id] = &viewerSession{file: f, size: meta.Size, detection: detection, ctx: sessionCtx, cancel: cancel}
 	s.mu.Unlock()
 	keep = true
 	return ViewerFile{ID: id, Name: meta.Name, Path: meta.Path, Size: strconv.FormatInt(meta.Size, 10),
@@ -122,6 +125,10 @@ func (s *ViewerService) ReadText(ctx context.Context, id, offset string, length 
 	if session == nil {
 		return ViewerTextChunk{}, &CommandError{"viewer_closed", "Файл уже закрыт."}
 	}
+	readCtx, cancelRead := context.WithCancel(ctx)
+	stopSessionCancel := context.AfterFunc(session.ctx, cancelRead)
+	defer stopSessionCancel()
+	defer cancelRead()
 	enc := requested
 	source := "manual"
 	auto := requested == viewer.EncodingAuto
@@ -146,7 +153,7 @@ func (s *ViewerService) ReadText(ctx context.Context, id, offset string, length 
 	}
 	readLength := int(value-rawStart) + length + extra
 	readLength = min(readLength, viewer.MaxReadSize)
-	data, readErr := session.file.ReadAt(ctx, rawStart, readLength)
+	data, readErr := session.file.ReadAt(readCtx, rawStart, readLength)
 	if readErr != nil && !errors.Is(readErr, io.EOF) {
 		if errors.Is(readErr, context.Canceled) || errors.Is(readErr, context.DeadlineExceeded) {
 			return ViewerTextChunk{}, readErr
@@ -186,8 +193,12 @@ func (s *ViewerService) ReadFile(ctx context.Context, id, offset string, length 
 	if session == nil {
 		return ViewerChunk{}, &CommandError{"viewer_closed", "Файл уже закрыт."}
 	}
+	readCtx, cancelRead := context.WithCancel(ctx)
+	stopSessionCancel := context.AfterFunc(session.ctx, cancelRead)
+	defer stopSessionCancel()
+	defer cancelRead()
 	currentSize := session.size
-	if meta, metaErr := session.file.Metadata(ctx); metaErr == nil {
+	if meta, metaErr := session.file.Metadata(readCtx); metaErr == nil {
 		currentSize = meta.Size
 	} else if errors.Is(metaErr, context.Canceled) || errors.Is(metaErr, context.DeadlineExceeded) {
 		return ViewerChunk{}, metaErr
@@ -195,7 +206,7 @@ func (s *ViewerService) ReadFile(ctx context.Context, id, offset string, length 
 	if value >= currentSize {
 		return ViewerChunk{Offset: offset, DataBase64: "", EOF: true, Size: strconv.FormatInt(currentSize, 10)}, nil
 	}
-	data, readErr := session.file.ReadAt(ctx, value, length)
+	data, readErr := session.file.ReadAt(readCtx, value, length)
 	if readErr != nil && !errors.Is(readErr, io.EOF) {
 		if errors.Is(readErr, context.Canceled) || errors.Is(readErr, context.DeadlineExceeded) {
 			return ViewerChunk{}, readErr
@@ -203,7 +214,7 @@ func (s *ViewerService) ReadFile(ctx context.Context, id, offset string, length 
 		return ViewerChunk{}, viewerError("Не удалось прочитать файл", "", readErr)
 	}
 	if errors.Is(readErr, io.EOF) {
-		if meta, metaErr := session.file.Metadata(ctx); metaErr == nil {
+		if meta, metaErr := session.file.Metadata(readCtx); metaErr == nil {
 			currentSize = meta.Size
 		}
 	}
@@ -220,6 +231,7 @@ func (s *ViewerService) CloseFile(id string) error {
 	if session == nil {
 		return nil
 	}
+	session.cancel()
 	if err := session.file.Close(); err != nil {
 		return &CommandError{"close_failed", fmt.Sprintf("Не удалось закрыть файл: %v", err)}
 	}
@@ -238,6 +250,7 @@ func (s *ViewerService) ServiceShutdown() error {
 	s.mu.Unlock()
 	var result error
 	for _, session := range sessions {
+		session.cancel()
 		result = errors.Join(result, session.file.Close())
 	}
 	return result

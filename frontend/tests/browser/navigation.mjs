@@ -115,7 +115,7 @@ try {
 
   // Viewer keeps one bounded text window, switches encoding from original
   // bytes and closes without disturbing the panels or v0.2 commands.
-  await cell("left", `${home}/one.txt`).click(); await page.keyboard.press("F3");
+  await cell("left", `${home}/one.txt`).click(); await functionButtons.nth(0).click();
   const viewer = page.getByRole("region", { name: "Просмотр файла" });
   await viewer.getByLabel("Текст файла").waitFor();
   assert.match(await viewer.textContent(), /Auto · UTF-8 · проверка UTF-8/);
@@ -129,6 +129,50 @@ try {
   await page.keyboard.press("Escape");
   await viewer.waitFor({ state: "hidden" });
   assert.equal(await page.evaluate(() => window.navigationTest.viewerClosed), 1);
+  await focused("left", `${home}/one.txt`);
+
+  // A 5 GiB HEX file keeps a bounded DOM window. Rapid scrollbar movement is
+  // coalesced, and a direct >4 GiB jump issues one bounded range request.
+  await page.evaluate(() => { window.navigationTest.viewerMode = "hex"; window.navigationTest.viewerBinaryReads.length = 0; });
+  await functionButtons.nth(0).click();
+  await viewer.getByLabel("HEX файла").waitFor();
+  const hexScroller = viewer.getByLabel("HEX файла").locator("xpath=..");
+  const openingReads = await page.evaluate(() => window.navigationTest.viewerBinaryReads);
+  assert.ok(openingReads.length <= 2, "HEX open performs one production read (at most two under React StrictMode)");
+  assert.ok(openingReads.every(read => read.length <= 64 * 1024), "every HEX request is bounded");
+  assert.ok(await hexScroller.evaluate(element => element.scrollHeight > element.clientHeight), "HEX file has a virtual scrollbar");
+  assert.ok(await viewer.locator("[data-hex-row]").count() <= 64, "HEX DOM rows stay near the viewport size");
+  const readsBeforeScroll = await page.evaluate(() => window.navigationTest.viewerBinaryReads.length);
+  await hexScroller.evaluate(async element => {
+    for (let index = 1; index <= 20; index++) {
+      element.scrollTop = (element.scrollHeight - element.clientHeight) * index / 20;
+      element.dispatchEvent(new Event("scroll", { bubbles: true }));
+      await new Promise(requestAnimationFrame);
+    }
+  });
+  await page.waitForTimeout(150);
+  const readsAfterScroll = await page.evaluate(() => window.navigationTest.viewerBinaryReads.length);
+  assert.ok(readsAfterScroll - readsBeforeScroll <= 1, "rapid HEX scroll coalesces range requests");
+  await viewer.getByRole("button", { name: "Вид" }).click();
+  await page.getByRole("menuitem", { name: /Перейти к смещению/ }).click();
+  await page.getByRole("textbox", { name: "Смещение (DEC или HEX)" }).fill("4096");
+  await page.getByRole("button", { name: "Перейти" }).click();
+  const row4096 = viewer.locator("[data-hex-row]", { hasText: /^00001000/ });
+  await row4096.waitFor();
+  const [row4096Box, hexScrollerBox] = await Promise.all([row4096.boundingBox(), hexScroller.boundingBox()]);
+  assert.ok(row4096Box && hexScrollerBox && row4096Box.y >= hexScrollerBox.y &&
+    row4096Box.y + row4096Box.height <= hexScrollerBox.y + hexScrollerBox.height,
+  "4096-byte jump places address 00001000 inside the viewport");
+  await viewer.getByRole("button", { name: "Вид" }).click();
+  await page.getByRole("menuitem", { name: /Перейти к смещению/ }).click();
+  await page.getByRole("textbox", { name: "Смещение (DEC или HEX)" }).fill("0x100000000");
+  await page.getByRole("button", { name: "Перейти" }).click();
+  await page.waitForFunction(() => window.navigationTest.viewerBinaryReads.some(read => BigInt(read.offset) > 0xffffffffn));
+  assert.ok(await viewer.locator("[data-hex-row]").count() <= 64, "jump keeps the HEX DOM bounded");
+  await page.keyboard.press("Escape");
+  await viewer.waitFor({ state: "hidden" });
+  assert.equal(await page.evaluate(() => window.navigationTest.viewerClosed), 2);
+  await page.evaluate(() => { window.navigationTest.viewerMode = "text"; });
   await focused("left", `${home}/one.txt`);
 
   // Compact path header edits the panel path; Escape cancels and Enter uses

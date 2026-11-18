@@ -9,7 +9,7 @@ const state = { trashed: new Set<string>(), previews: [] as any[], reads: [] as 
   release: undefined as (() => void) | undefined, emptyRoot: initialRoot,
   mkdirs: [] as { parent: string; name: string }[], created: new Map<string, string[]>(), holdMkdir: false,
   releaseMkdir: undefined as (() => void) | undefined, operations: [] as any[], conflictResolutions: [] as any[],
-  viewerReads: [] as string[], viewerClosed: 0 };
+  viewerReads: [] as string[], viewerBinaryReads: [] as { offset: string; length: number }[], viewerMode: "text", viewerClosed: 0 };
 Object.assign(window, { navigationTest: state });
 
 function resolve(path: string, base: string) {
@@ -97,8 +97,10 @@ function cancellable<T>(value: T) {
 }
 
 export function OpenFile() {
-  return cancellable({ id: "viewer-1", name: "one.txt", path: `${home}/one.txt`, size: "4294967296",
-    modifiedAt: "", initialMode: "text", encoding: "utf-8", encodingSource: "heuristic" });
+  const hex = state.viewerMode === "hex";
+  return cancellable({ id: "viewer-1", name: hex ? "large.bin" : "one.txt", path: `${home}/${hex ? "large.bin" : "one.txt"}`,
+    size: hex ? (5n * 1024n * 1024n * 1024n).toString() : "4294967296",
+    modifiedAt: "", initialMode: state.viewerMode, encoding: "utf-8", encodingSource: "heuristic" });
 }
 export function ReadText(_id: string, offset: string, _length: number, encoding: string) {
   state.viewerReads.push(encoding);
@@ -107,7 +109,14 @@ export function ReadText(_id: string, offset: string, _length: number, encoding:
     text: encoding === "koi8-r" ? "текст KOI8-R\n" : "UTF-8 текст\n", eof: false,
     encoding: actual, encodingSource: encoding === "auto" ? "heuristic" : "manual", auto: encoding === "auto" });
 }
-export function ReadFile() { return cancellable({ offset: "0", dataBase64: "", length: 0, eof: true }); }
+export function ReadFile(_id: string, offset: string, length: number) {
+  const size = 5n * 1024n * 1024n * 1024n;
+  const available = size - BigInt(offset);
+  const actual = Math.max(0, Number(available < BigInt(length) ? available : BigInt(length)));
+  state.viewerBinaryReads.push({ offset, length });
+  return cancellable({ offset, dataBase64: btoa("\0".repeat(actual)), length: actual,
+    eof: BigInt(offset) + BigInt(actual) >= size, size: size.toString() });
+}
 export function CloseFile() { state.viewerClosed++; return cancellable(undefined); }
 
 export async function PrepareTrash(context: any) {

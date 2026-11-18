@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Alert, Box, Button, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, Divider, FormControl,
+import { Alert, Box, Button, CircularProgress, Dialog, DialogActions, DialogContent, Divider, FormControl,
   Menu, MenuItem, Paper, Select, TextField, Typography } from "@mui/material";
 import type { CancellablePromise } from "@wailsio/runtime";
 import type { ViewerChunk, ViewerFile, ViewerTextChunk } from "../bindings/github.com/rikkimongoose/marten-commander/internal/desktop/models";
 import { CloseFile, ReadFile, ReadText } from "../bindings/github.com/rikkimongoose/marten-commander/internal/desktop/viewerservice";
 import { commandErrorMessage } from "./commands";
 import { decodeBase64, hexPreviewRows, normalizeViewerMode, viewerEscapeAction, viewerModes, type ViewerMode } from "./viewerModes";
-import { hexOffsetForScroll, hexScrollTopForOffset, hexVirtualLayout, hexWindowForOffset, needsHexWindow,
+import { HexLoadScheduler, hexOffsetForScroll, hexScrollTopForOffset, hexVirtualLayout, hexVisibleWindow, hexWindowForOffset, needsHexWindow,
   parseHexOffset } from "./hexViewer";
 import { byteOffsetForScroll, encodingStatus, needsTextWindow, RequestGeneration, textEncodings, textWindowSize,
   virtualWindowLayout, type TextEncoding } from "./textViewer";
@@ -38,8 +38,12 @@ export function Viewer({ file, close, reportCloseError }: ViewerProps) {
   const scrollAfterHexLoad = useRef<bigint>();
   const closing = useRef(false);
   const scrollFrame = useRef(0);
+  const hexLoader = useRef<(offset: bigint) => void>(() => {});
+  const hexScheduler = useRef<HexLoadScheduler>();
+  if (!hexScheduler.current) hexScheduler.current = new HexLoadScheduler(offset => hexLoader.current(offset));
   const fileSize = useMemo(() => BigInt(file.size), [file.size]);
   const [hexSize, setHexSize] = useState(fileSize);
+  const [hexViewportOffset, setHexViewportOffset] = useState(0n);
   const hexSizeRef = useRef(fileSize);
 
   const fail = useCallback((reason: unknown, token: number) => {
@@ -65,6 +69,7 @@ export function Viewer({ file, close, reportCloseError }: ViewerProps) {
   }, [fail, file.id]);
 
   const loadHex = useCallback((offset: bigint) => {
+    hexScheduler.current?.cancel();
     const window = hexWindowForOffset(offset, hexSizeRef.current);
     hexPosition.current = offset;
     const token = generation.current.begin();
@@ -86,16 +91,19 @@ export function Viewer({ file, close, reportCloseError }: ViewerProps) {
         hexSizeRef.current = currentSize;
         setHexSize(currentSize);
         setHexChunk({ start, bytes: decoded, eof: chunk.eof });
+        setHexViewportOffset(offset);
         setLoading(false);
       }
     }).catch(reason => fail(reason, token));
   }, [fail, file.id]);
+  hexLoader.current = loadHex;
 
   const closeViewer = useCallback(() => {
     if (closing.current) return;
     closing.current = true;
     generation.current.invalidate();
     cancelAnimationFrame(scrollFrame.current);
+    hexScheduler.current?.cancel();
     void request.current?.cancel("viewer closed");
     void CloseFile(file.id).catch(reason => reportCloseError(commandErrorMessage(reason))).finally(close);
   }, [close, file.id, reportCloseError]);
@@ -109,6 +117,7 @@ export function Viewer({ file, close, reportCloseError }: ViewerProps) {
   useEffect(() => () => {
     generation.current.invalidate();
     cancelAnimationFrame(scrollFrame.current);
+    hexScheduler.current?.cancel();
     void request.current?.cancel("viewer unmounted");
   }, []);
 
@@ -132,8 +141,10 @@ export function Viewer({ file, close, reportCloseError }: ViewerProps) {
   const layout = useMemo(() => textChunk ? virtualWindowLayout(fileSize, BigInt(textChunk.startOffset),
     BigInt(textChunk.nextOffset), textChunk.text, scroller.current?.clientHeight ?? 600) : undefined,
   [fileSize, textChunk]);
-  const hexLayout = useMemo(() => hexChunk ? hexVirtualLayout(hexSize, hexChunk.start, hexChunk.bytes.length,
-    scroller.current?.clientHeight ?? 600) : undefined, [hexChunk, hexSize]);
+  const visibleHex = useMemo(() => hexChunk ? hexVisibleWindow(hexChunk.bytes, hexChunk.start, hexViewportOffset,
+    scroller.current?.clientHeight ?? 600) : undefined, [hexChunk, hexViewportOffset]);
+  const hexLayout = useMemo(() => visibleHex ? hexVirtualLayout(hexSize, visibleHex.start, visibleHex.bytes.length,
+    scroller.current?.clientHeight ?? 600) : undefined, [hexSize, visibleHex]);
 
   useEffect(() => {
     const offset = scrollAfterHexLoad.current;
@@ -163,7 +174,10 @@ export function Viewer({ file, close, reportCloseError }: ViewerProps) {
       if (!element || !hexChunk) return;
       const target = hexOffsetForScroll(element.scrollTop, element.scrollHeight, element.clientHeight, hexSize);
       hexPosition.current = target;
-      if (needsHexWindow(target, hexChunk.start, hexChunk.bytes.length, hexSize)) loadHex(target);
+      setHexViewportOffset(target);
+      if (needsHexWindow(target, hexChunk.start, hexChunk.bytes.length, hexSize)) {
+        hexScheduler.current?.schedule(target);
+      }
     });
   };
 
@@ -172,6 +186,7 @@ export function Viewer({ file, close, reportCloseError }: ViewerProps) {
       const offset = parseHexOffset(offsetDialog.value, hexSize);
       setOffsetDialog({ open: false, value: "", error: "" });
       setSelectedHexOffset(offset);
+      setHexViewportOffset(offset);
       scrollAfterHexLoad.current = offset;
       loadHex(offset);
     } catch (reason) {
@@ -188,7 +203,8 @@ export function Viewer({ file, close, reportCloseError }: ViewerProps) {
       if (hexSize === 0n) return <Typography color="text.secondary">Файл пуст.</Typography>;
       return <Box aria-label="HEX файла" sx={{ minWidth: "100%", width: "max-content", fontFamily: "monospace", fontSize: 13 }}>
         <Box sx={{ height: hexLayout?.topHeight ?? 0 }} />
-        {hexPreviewRows(hexChunk.bytes, hexChunk.start).map(row => <Box key={row.offset.toString()} sx={{ display: "flex", height: "18px", lineHeight: "18px" }}>
+        {hexPreviewRows(visibleHex?.bytes ?? new Uint8Array(), visibleHex?.start ?? 0n).map(row => <Box key={row.offset.toString()} data-hex-row
+          sx={{ display: "flex", height: "18px", lineHeight: "18px" }}>
           <Box component="span" sx={{ mr: 2 }}>{row.address}</Box>
           <Box component="span" sx={{ display: "flex", mr: 2 }}>
             {Array.from({ length: 16 }, (_, index) => {
@@ -263,7 +279,6 @@ export function Viewer({ file, close, reportCloseError }: ViewerProps) {
     </Box>
     <Dialog open={offsetDialog.open} onClose={() => setOffsetDialog(value => ({ ...value, open: false }))}
       slotProps={{ paper: { component: "form", onSubmit: event => { event.preventDefault(); jumpToOffset(); } } }}>
-      <DialogTitle>Перейти к смещению</DialogTitle>
       <DialogContent sx={{ minWidth: { xs: 280, sm: 420 } }}>
         {offsetDialog.error && <Alert severity="error" sx={{ mb: 1 }}>{offsetDialog.error}</Alert>}
         <TextField autoFocus fullWidth label="Смещение (DEC или HEX)" placeholder="4096 или 0x1000"

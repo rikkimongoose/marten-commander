@@ -2,6 +2,7 @@ export const hexBytesPerRow = 16;
 export const hexRowHeight = 18;
 export const hexWindowSize = 64 * 1024;
 export const maximumHexVirtualHeight = 12_000_000;
+export const hexLoadDebounceMs = 75;
 
 export interface HexWindow {
   start: bigint;
@@ -15,7 +16,38 @@ export interface HexVirtualLayout {
   bottomHeight: number;
 }
 
+export interface HexVisibleWindow {
+  start: bigint;
+  bytes: Uint8Array;
+  rowCount: number;
+}
+
 const rowBytes = BigInt(hexBytesPerRow);
+// A millionth of a multi-gigabyte file is several KiB, which made small jumps
+// collapse to scrollTop=0. A trillionth stays exactly representable as a JS
+// integer and gives sub-byte precision for ordinary multi-gigabyte files.
+const scrollRatioScale = 1_000_000_000_000n;
+
+export class HexLoadScheduler {
+  #timer: ReturnType<typeof setTimeout> | undefined;
+  readonly #load: (offset: bigint) => void;
+  readonly #delay: number;
+
+  constructor(load: (offset: bigint) => void, delay = hexLoadDebounceMs) {
+    this.#load = load;
+    this.#delay = delay;
+  }
+
+  schedule(offset: bigint): void {
+    clearTimeout(this.#timer);
+    this.#timer = setTimeout(() => { this.#timer = undefined; this.#load(offset); }, this.#delay);
+  }
+
+  cancel(): void {
+    clearTimeout(this.#timer);
+    this.#timer = undefined;
+  }
+}
 
 export function parseHexOffset(input: string, size: bigint): bigint {
   const value = input.trim();
@@ -47,6 +79,28 @@ export function needsHexWindow(offset: bigint, start: bigint, length: number, si
   return (start > 0n && offset < start + margin) || (end < size && offset >= end - margin);
 }
 
+// Keep the byte cache and the React tree independent. The cache is large
+// enough to absorb normal scrolling, while only viewport rows plus a small
+// overscan are turned into React elements.
+export function hexVisibleWindow(bytes: Uint8Array, loadedStart: bigint, offset: bigint,
+  viewportHeight: number, overscanRows = 8): HexVisibleWindow {
+  const loadedRows = Math.ceil(bytes.length / hexBytesPerRow);
+  const targetRow = offset / rowBytes;
+  const loadedFirstRow = loadedStart / rowBytes;
+  const loadedLastRow = loadedFirstRow + BigInt(loadedRows);
+  if (loadedRows === 0 || targetRow < loadedFirstRow || targetRow >= loadedLastRow) {
+    return { start: targetRow * rowBytes, bytes: bytes.subarray(0, 0), rowCount: 0 };
+  }
+  const visibleRows = Math.max(1, Math.ceil(viewportHeight / hexRowHeight));
+  const rowCount = Math.min(loadedRows, visibleRows + Math.max(0, overscanRows) * 2);
+  const targetIndex = Number(targetRow - loadedFirstRow);
+  const maximumFirst = Math.max(0, loadedRows - rowCount);
+  const first = Math.min(maximumFirst, Math.max(0, targetIndex - Math.max(0, overscanRows)));
+  const end = Math.min(bytes.length, (first + rowCount) * hexBytesPerRow);
+  return { start: loadedStart + BigInt(first * hexBytesPerRow),
+    bytes: bytes.subarray(first * hexBytesPerRow, end), rowCount };
+}
+
 export function hexVirtualLayout(size: bigint, start: bigint, byteLength: number, viewportHeight: number): HexVirtualLayout {
   const totalRows = size <= 0n ? 0n : (size + rowBytes - 1n) / rowBytes;
   const contentRows = Math.max(1, Math.ceil(byteLength / hexBytesPerRow));
@@ -60,7 +114,7 @@ export function hexVirtualLayout(size: bigint, start: bigint, byteLength: number
   const maximumStartRow = totalRows > loadedRows ? totalRows - loadedRows : 0n;
   const availableHeight = Math.max(0, totalHeight - contentHeight);
   const topHeight = maximumStartRow === 0n ? 0
-    : Number(startRow * 1_000_000n / maximumStartRow) / 1_000_000 * availableHeight;
+    : Number(startRow * scrollRatioScale / maximumStartRow) / Number(scrollRatioScale) * availableHeight;
   return { totalHeight, topHeight, contentHeight, bottomHeight: Math.max(0, totalHeight - topHeight - contentHeight) };
 }
 
@@ -71,7 +125,9 @@ export function hexOffsetForScroll(scrollTop: number, scrollHeight: number, view
   const maximumScroll = scrollHeight - viewportHeight;
   if (maximumFirstRow === 0n || maximumScroll <= 0) return 0n;
   const ratio = Math.max(0, Math.min(1, scrollTop / maximumScroll));
-  return maximumFirstRow * BigInt(Math.round(ratio * 1_000_000)) / 1_000_000n * rowBytes;
+  const scaledRatio = BigInt(Math.round(ratio * Number(scrollRatioScale)));
+  const row = (maximumFirstRow * scaledRatio + scrollRatioScale / 2n) / scrollRatioScale;
+  return row * rowBytes;
 }
 
 export function hexScrollTopForOffset(offset: bigint, scrollHeight: number, viewportHeight: number, size: bigint): number {
@@ -82,5 +138,5 @@ export function hexScrollTopForOffset(offset: bigint, scrollHeight: number, view
   if (maximumFirstRow === 0n || maximumScroll === 0) return 0;
   const row = offset / rowBytes;
   const bounded = row > maximumFirstRow ? maximumFirstRow : row;
-  return Number(bounded * 1_000_000n / maximumFirstRow) / 1_000_000 * maximumScroll;
+  return Number(bounded * scrollRatioScale / maximumFirstRow) / Number(scrollRatioScale) * maximumScroll;
 }

@@ -3,7 +3,7 @@
 
 /**
  * ViewerService owns open handles. Every successful OpenFile must be paired
- * with CloseFile; Wails call contexts cancel individual range reads.
+ * with CloseFile; call contexts and closing the session cancel range reads.
  * @module
  */
 

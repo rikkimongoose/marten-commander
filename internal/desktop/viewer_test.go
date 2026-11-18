@@ -21,10 +21,11 @@ type viewerSourceStub struct {
 func (s viewerSourceStub) Open(context.Context, string) (viewer.File, error) { return s.file, s.err }
 
 type viewerFileStub struct {
-	data   []byte
-	closed atomic.Int32
-	block  bool
-	size   int64
+	data    []byte
+	closed  atomic.Int32
+	block   bool
+	entered chan struct{}
+	size    int64
 }
 
 func (f *viewerFileStub) Metadata(context.Context) (viewer.Metadata, error) {
@@ -36,6 +37,12 @@ func (f *viewerFileStub) Metadata(context.Context) (viewer.Metadata, error) {
 }
 func (f *viewerFileStub) ReadAt(ctx context.Context, offset int64, length int) ([]byte, error) {
 	if f.block {
+		if f.entered != nil {
+			select {
+			case f.entered <- struct{}{}:
+			default:
+			}
+		}
 		<-ctx.Done()
 		return nil, ctx.Err()
 	}
@@ -54,6 +61,11 @@ func (f *viewerFileStub) Close() error { f.closed.Add(1); return nil }
 type sparseViewerFile struct {
 	size       int64
 	lastOffset atomic.Int64
+	readCalls  atomic.Int64
+	requested  atomic.Int64
+	returned   atomic.Int64
+	maxRequest atomic.Int64
+	closed     atomic.Int32
 }
 
 func (f *sparseViewerFile) Metadata(context.Context) (viewer.Metadata, error) {
@@ -61,16 +73,53 @@ func (f *sparseViewerFile) Metadata(context.Context) (viewer.Metadata, error) {
 }
 func (f *sparseViewerFile) ReadAt(_ context.Context, offset int64, length int) ([]byte, error) {
 	f.lastOffset.Store(offset)
+	f.readCalls.Add(1)
+	f.requested.Add(int64(length))
+	for previous := f.maxRequest.Load(); int64(length) > previous && !f.maxRequest.CompareAndSwap(previous, int64(length)); previous = f.maxRequest.Load() {
+	}
 	if offset >= f.size {
 		return nil, io.EOF
 	}
 	available := f.size - offset
 	if int64(length) > available {
+		f.returned.Add(available)
 		return make([]byte, int(available)), io.EOF
 	}
+	f.returned.Add(int64(length))
 	return make([]byte, length), nil
 }
-func (f *sparseViewerFile) Close() error { return nil }
+func (f *sparseViewerFile) Close() error { f.closed.Add(1); return nil }
+
+func TestViewerServiceFiveGiBOpenAndEndJumpAreBounded(t *testing.T) {
+	const size = int64(5) * 1024 * 1024 * 1024
+	file := &sparseViewerFile{size: size}
+	service := NewViewerService(viewerSourceStub{file: file})
+	opened, err := service.OpenFile(context.Background(), encode(filepath.Join(t.TempDir(), "large.bin")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if file.readCalls.Load() != 1 || file.requested.Load() != 512 || file.returned.Load() != 512 || file.maxRequest.Load() != 512 {
+		t.Fatalf("open reads: calls=%d requested=%d returned=%d max=%d", file.readCalls.Load(), file.requested.Load(),
+			file.returned.Load(), file.maxRequest.Load())
+	}
+	const window = 64 * 1024
+	offset := size - window
+	chunk, err := service.ReadFile(context.Background(), opened.ID, strconv.FormatInt(offset, 10), window)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if chunk.Length != window || !chunk.EOF || file.lastOffset.Load() != offset || file.readCalls.Load() != 2 ||
+		file.requested.Load() != 512+window || file.maxRequest.Load() != window {
+		t.Fatalf("end jump was not direct and bounded: chunk=%#v calls=%d requested=%d max=%d offset=%d", chunk,
+			file.readCalls.Load(), file.requested.Load(), file.maxRequest.Load(), file.lastOffset.Load())
+	}
+	if err := service.CloseFile(opened.ID); err != nil {
+		t.Fatal(err)
+	}
+	if file.closed.Load() != 1 || len(service.files) != 0 {
+		t.Fatalf("close leaked a session: closes=%d sessions=%d", file.closed.Load(), len(service.files))
+	}
+}
 
 func TestViewerServiceOpenReadClose(t *testing.T) {
 	data := []byte{0, 1, 2, 0xff, 4}
@@ -138,6 +187,57 @@ func TestViewerServiceReadValidationAndCancellation(t *testing.T) {
 		t.Fatalf("cancelled read: %v", err)
 	}
 	_ = blockedService.CloseFile(blockedOpen.ID)
+}
+
+func TestViewerServiceCloseCancelsAnActiveRead(t *testing.T) {
+	file := &viewerFileStub{data: []byte("data"), entered: make(chan struct{}, 1)}
+	service := NewViewerService(viewerSourceStub{file: file})
+	opened, err := service.OpenFile(context.Background(), encode(filepath.Join(t.TempDir(), "blocked.bin")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	file.block = true
+	result := make(chan error, 1)
+	go func() {
+		_, readErr := service.ReadFile(context.Background(), opened.ID, "0", 4)
+		result <- readErr
+	}()
+	<-file.entered
+	if err := service.CloseFile(opened.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-result; !errors.Is(err, context.Canceled) {
+		t.Fatalf("active read after close = %v", err)
+	}
+	if file.closed.Load() != 1 || len(service.files) != 0 {
+		t.Fatalf("close cleanup: closes=%d sessions=%d", file.closed.Load(), len(service.files))
+	}
+}
+
+func TestViewerServiceRepeatedOpenCloseDoesNotAccumulateSessions(t *testing.T) {
+	var files []*viewerFileStub
+	service := NewViewerService(fileSourceFunc(func(context.Context, string) (viewer.File, error) {
+		file := &viewerFileStub{data: []byte("sample")}
+		files = append(files, file)
+		return file, nil
+	}))
+	for index := 0; index < 32; index++ {
+		opened, err := service.OpenFile(context.Background(), encode(filepath.Join(t.TempDir(), "sample.bin")))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := service.CloseFile(opened.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(service.files) != 0 {
+		t.Fatalf("sessions after reopen loop = %d", len(service.files))
+	}
+	for index, file := range files {
+		if file.closed.Load() != 1 {
+			t.Fatalf("file %d close count = %d", index, file.closed.Load())
+		}
+	}
 }
 
 func TestViewerServiceReadsExactOffsetsBeyondFourGiBAndEOF(t *testing.T) {
