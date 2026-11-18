@@ -100,6 +100,7 @@ export interface ViewerChunk {
     "dataBase64": string;
     "length": number;
     "eof": boolean;
+    "size": string;
 }
 
 export interface ViewerFile {

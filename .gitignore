@@ -22,3 +22,8 @@ build/bin/
 # OS
 .DS_Store
 Thumbs.db
+# Wails / Task generated checksums
+.task/checksum/
+
+# Gradle local cache
+build/android/.gradle/

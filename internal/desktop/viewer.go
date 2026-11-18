@@ -33,6 +33,7 @@ type ViewerChunk struct {
 	DataBase64 string `json:"dataBase64"`
 	Length     int    `json:"length"`
 	EOF        bool   `json:"eof"`
+	Size       string `json:"size"`
 }
 
 type ViewerTextChunk struct {
@@ -185,6 +186,15 @@ func (s *ViewerService) ReadFile(ctx context.Context, id, offset string, length 
 	if session == nil {
 		return ViewerChunk{}, &CommandError{"viewer_closed", "Файл уже закрыт."}
 	}
+	currentSize := session.size
+	if meta, metaErr := session.file.Metadata(ctx); metaErr == nil {
+		currentSize = meta.Size
+	} else if errors.Is(metaErr, context.Canceled) || errors.Is(metaErr, context.DeadlineExceeded) {
+		return ViewerChunk{}, metaErr
+	}
+	if value >= currentSize {
+		return ViewerChunk{Offset: offset, DataBase64: "", EOF: true, Size: strconv.FormatInt(currentSize, 10)}, nil
+	}
 	data, readErr := session.file.ReadAt(ctx, value, length)
 	if readErr != nil && !errors.Is(readErr, io.EOF) {
 		if errors.Is(readErr, context.Canceled) || errors.Is(readErr, context.DeadlineExceeded) {
@@ -192,8 +202,14 @@ func (s *ViewerService) ReadFile(ctx context.Context, id, offset string, length 
 		}
 		return ViewerChunk{}, viewerError("Не удалось прочитать файл", "", readErr)
 	}
-	eof := errors.Is(readErr, io.EOF) || value >= session.size || int64(len(data)) < int64(length)
-	return ViewerChunk{Offset: offset, DataBase64: base64.StdEncoding.EncodeToString(data), Length: len(data), EOF: eof}, nil
+	if errors.Is(readErr, io.EOF) {
+		if meta, metaErr := session.file.Metadata(ctx); metaErr == nil {
+			currentSize = meta.Size
+		}
+	}
+	eof := errors.Is(readErr, io.EOF) || int64(len(data)) < int64(length) || int64(len(data)) >= currentSize-value
+	return ViewerChunk{Offset: offset, DataBase64: base64.StdEncoding.EncodeToString(data), Length: len(data), EOF: eof,
+		Size: strconv.FormatInt(currentSize, 10)}, nil
 }
 
 func (s *ViewerService) CloseFile(id string) error {

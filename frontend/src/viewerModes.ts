@@ -24,14 +24,27 @@ export function textPreview(bytes: Uint8Array): string {
   return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
 }
 
-export function hexPreview(bytes: Uint8Array, start = 0n): string {
-  const rows: string[] = [];
+export interface HexPreviewRow {
+  offset: bigint;
+  address: string;
+  values: number[];
+  ascii: string[];
+}
+
+export function hexPreviewRows(bytes: Uint8Array, start = 0n): HexPreviewRow[] {
+  const rows: HexPreviewRow[] = [];
   for (let index = 0; index < bytes.length; index += 16) {
-    const row = bytes.slice(index, index + 16);
-    const address = (start + BigInt(index)).toString(16).padStart(8, "0");
-    const hex = [...row].map(value => value.toString(16).padStart(2, "0")).join(" ").padEnd(47);
-    const ascii = [...row].map(value => value >= 32 && value < 127 ? String.fromCharCode(value) : ".").join("");
-    rows.push(address + "  " + hex + "  |" + ascii + "|");
+    const offset = start + BigInt(index);
+    const values = [...bytes.slice(index, index + 16)];
+    rows.push({ offset, address: offset.toString(16).padStart(8, "0"), values,
+      ascii: values.map(value => value >= 32 && value < 127 ? String.fromCharCode(value) : ".") });
   }
-  return rows.join("\n");
+  return rows;
+}
+
+export function hexPreview(bytes: Uint8Array, start = 0n): string {
+  return hexPreviewRows(bytes, start).map(row => {
+    const hex = row.values.map(value => value.toString(16).padStart(2, "0")).join(" ").padEnd(47);
+    return row.address + "  " + hex + "  |" + row.ascii.join("") + "|";
+  }).join("\n");
 }

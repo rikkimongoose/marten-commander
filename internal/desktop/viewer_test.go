@@ -51,6 +51,27 @@ func (f *viewerFileStub) ReadAt(ctx context.Context, offset int64, length int) (
 }
 func (f *viewerFileStub) Close() error { f.closed.Add(1); return nil }
 
+type sparseViewerFile struct {
+	size       int64
+	lastOffset atomic.Int64
+}
+
+func (f *sparseViewerFile) Metadata(context.Context) (viewer.Metadata, error) {
+	return viewer.Metadata{Name: "large.bin", Path: "/large.bin", Size: f.size, ModifiedAt: "now"}, nil
+}
+func (f *sparseViewerFile) ReadAt(_ context.Context, offset int64, length int) ([]byte, error) {
+	f.lastOffset.Store(offset)
+	if offset >= f.size {
+		return nil, io.EOF
+	}
+	available := f.size - offset
+	if int64(length) > available {
+		return make([]byte, int(available)), io.EOF
+	}
+	return make([]byte, length), nil
+}
+func (f *sparseViewerFile) Close() error { return nil }
+
 func TestViewerServiceOpenReadClose(t *testing.T) {
 	data := []byte{0, 1, 2, 0xff, 4}
 	file := &viewerFileStub{data: data}
@@ -117,6 +138,53 @@ func TestViewerServiceReadValidationAndCancellation(t *testing.T) {
 		t.Fatalf("cancelled read: %v", err)
 	}
 	_ = blockedService.CloseFile(blockedOpen.ID)
+}
+
+func TestViewerServiceReadsExactOffsetsBeyondFourGiBAndEOF(t *testing.T) {
+	const size = int64(6)*1024*1024*1024 + 29
+	file := &sparseViewerFile{size: size}
+	service := NewViewerService(viewerSourceStub{file: file})
+	opened, err := service.OpenFile(context.Background(), encode(filepath.Join(t.TempDir(), "large.bin")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.CloseFile(opened.ID)
+
+	offset := int64(5)*1024*1024*1024 + 7
+	chunk, err := service.ReadFile(context.Background(), opened.ID, strconv.FormatInt(offset, 10), 32)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if file.lastOffset.Load() != offset || chunk.Offset != strconv.FormatInt(offset, 10) || chunk.Length != 32 || chunk.EOF || chunk.Size != strconv.FormatInt(size, 10) {
+		t.Fatalf("large-offset chunk = %#v, source offset = %d", chunk, file.lastOffset.Load())
+	}
+
+	last, err := service.ReadFile(context.Background(), opened.ID, strconv.FormatInt(size-7, 10), 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if last.Length != 7 || !last.EOF {
+		t.Fatalf("final partial chunk = %#v", last)
+	}
+	lastRead := file.lastOffset.Load()
+	past, err := service.ReadFile(context.Background(), opened.ID, strconv.FormatInt(size+100, 10), 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if past.Length != 0 || !past.EOF || file.lastOffset.Load() != lastRead {
+		t.Fatalf("past-EOF chunk = %#v, source was read at %d", past, file.lastOffset.Load())
+	}
+
+	file.size = 1024
+	shrunk, err := service.ReadFile(context.Background(), opened.ID, "2048", 16)
+	if err != nil || !shrunk.EOF || shrunk.Length != 0 || shrunk.Size != "1024" {
+		t.Fatalf("read after shrink = %#v, %v", shrunk, err)
+	}
+	file.size = 4096
+	grown, err := service.ReadFile(context.Background(), opened.ID, "2048", 16)
+	if err != nil || grown.EOF || grown.Length != 16 || grown.Size != "4096" {
+		t.Fatalf("read after growth = %#v, %v", grown, err)
+	}
 }
 
 func TestViewerServiceReadsBoundedDecodedWindows(t *testing.T) {

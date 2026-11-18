@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Alert, Box, Button, CircularProgress, Divider, FormControl, Menu, MenuItem, Paper, Select, Typography } from "@mui/material";
+import { Alert, Box, Button, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, Divider, FormControl,
+  Menu, MenuItem, Paper, Select, TextField, Typography } from "@mui/material";
 import type { CancellablePromise } from "@wailsio/runtime";
 import type { ViewerChunk, ViewerFile, ViewerTextChunk } from "../bindings/github.com/rikkimongoose/marten-commander/internal/desktop/models";
 import { CloseFile, ReadFile, ReadText } from "../bindings/github.com/rikkimongoose/marten-commander/internal/desktop/viewerservice";
 import { commandErrorMessage } from "./commands";
-import { decodeBase64, hexPreview, normalizeViewerMode, viewerEscapeAction, viewerModes, type ViewerMode } from "./viewerModes";
+import { decodeBase64, hexPreviewRows, normalizeViewerMode, viewerEscapeAction, viewerModes, type ViewerMode } from "./viewerModes";
+import { hexOffsetForScroll, hexScrollTopForOffset, hexVirtualLayout, hexWindowForOffset, needsHexWindow,
+  parseHexOffset } from "./hexViewer";
 import { byteOffsetForScroll, encodingStatus, needsTextWindow, RequestGeneration, textEncodings, textWindowSize,
   virtualWindowLayout, type TextEncoding } from "./textViewer";
-
-const previewSize = 64 * 1024;
 
 interface ViewerProps {
   file: ViewerFile;
@@ -22,7 +23,9 @@ export function Viewer({ file, close, reportCloseError }: ViewerProps) {
   const [mode, setMode] = useState<ViewerMode>(() => normalizeViewerMode(file.initialMode));
   const [encoding, setEncoding] = useState<TextEncoding>("auto");
   const [textChunk, setTextChunk] = useState<ViewerTextChunk>();
-  const [bytes, setBytes] = useState<Uint8Array>();
+  const [hexChunk, setHexChunk] = useState<{ start: bigint; bytes: Uint8Array; eof: boolean }>();
+  const [selectedHexOffset, setSelectedHexOffset] = useState<bigint>();
+  const [offsetDialog, setOffsetDialog] = useState({ open: false, value: "", error: "" });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [menu, setMenu] = useState<{ name: "file" | "edit" | "view"; anchor: HTMLElement }>();
@@ -30,10 +33,14 @@ export function Viewer({ file, close, reportCloseError }: ViewerProps) {
   const generation = useRef(new RequestGeneration());
   const root = useRef<HTMLDivElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
-  const position = useRef("0");
+  const textPosition = useRef("0");
+  const hexPosition = useRef(0n);
+  const scrollAfterHexLoad = useRef<bigint>();
   const closing = useRef(false);
   const scrollFrame = useRef(0);
   const fileSize = useMemo(() => BigInt(file.size), [file.size]);
+  const [hexSize, setHexSize] = useState(fileSize);
+  const hexSizeRef = useRef(fileSize);
 
   const fail = useCallback((reason: unknown, token: number) => {
     if (!closing.current && generation.current.current(token) && (!(reason instanceof Error) || reason.name !== "CancelError")) {
@@ -50,22 +57,36 @@ export function Viewer({ file, close, reportCloseError }: ViewerProps) {
     request.current = next;
     next.then(chunk => {
       if (!closing.current && generation.current.current(token)) {
-        position.current = chunk.startOffset;
+        textPosition.current = chunk.startOffset;
         setTextChunk(chunk);
         setLoading(false);
       }
     }).catch(reason => fail(reason, token));
   }, [fail, file.id]);
 
-  const loadHex = useCallback(() => {
+  const loadHex = useCallback((offset: bigint) => {
+    const window = hexWindowForOffset(offset, hexSizeRef.current);
+    hexPosition.current = offset;
     const token = generation.current.begin();
-    void request.current?.cancel("viewer mode changed");
-    setLoading(true); setError("");
-    const next = ReadFile(file.id, "0", previewSize);
+    void request.current?.cancel("superseded HEX window");
+    setError("");
+    if (window.length === 0) {
+      setHexChunk({ start: 0n, bytes: new Uint8Array(), eof: true });
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    const next = ReadFile(file.id, window.start.toString(), window.length);
     request.current = next;
     next.then(chunk => {
       if (!closing.current && generation.current.current(token)) {
-        setBytes(decodeBase64(chunk.dataBase64)); setLoading(false);
+        const start = BigInt(chunk.offset);
+        const decoded = decodeBase64(chunk.dataBase64);
+        const currentSize = BigInt(chunk.size);
+        hexSizeRef.current = currentSize;
+        setHexSize(currentSize);
+        setHexChunk({ start, bytes: decoded, eof: chunk.eof });
+        setLoading(false);
       }
     }).catch(reason => fail(reason, token));
   }, [fail, file.id]);
@@ -81,8 +102,8 @@ export function Viewer({ file, close, reportCloseError }: ViewerProps) {
 
   useEffect(() => {
     root.current?.focus();
-    if (mode === "text") loadText(position.current, encoding);
-    else if (mode === "hex") loadHex();
+    if (mode === "text") loadText(textPosition.current, encoding);
+    else if (mode === "hex") loadHex(hexPosition.current);
   }, [encoding, loadHex, loadText, mode]);
 
   useEffect(() => () => {
@@ -93,6 +114,7 @@ export function Viewer({ file, close, reportCloseError }: ViewerProps) {
 
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && offsetDialog.open) return;
       const action = viewerEscapeAction(event.key, !!menu);
       if (action === "none") return;
       event.preventDefault();
@@ -101,7 +123,7 @@ export function Viewer({ file, close, reportCloseError }: ViewerProps) {
     };
     window.addEventListener("keydown", keydown);
     return () => window.removeEventListener("keydown", keydown);
-  }, [closeViewer, menu]);
+  }, [closeViewer, menu, offsetDialog.open]);
 
   const openMenu = (name: "file" | "edit" | "view") => (event: React.MouseEvent<HTMLElement>) =>
     setMenu({ name, anchor: event.currentTarget });
@@ -110,6 +132,19 @@ export function Viewer({ file, close, reportCloseError }: ViewerProps) {
   const layout = useMemo(() => textChunk ? virtualWindowLayout(fileSize, BigInt(textChunk.startOffset),
     BigInt(textChunk.nextOffset), textChunk.text, scroller.current?.clientHeight ?? 600) : undefined,
   [fileSize, textChunk]);
+  const hexLayout = useMemo(() => hexChunk ? hexVirtualLayout(hexSize, hexChunk.start, hexChunk.bytes.length,
+    scroller.current?.clientHeight ?? 600) : undefined, [hexChunk, hexSize]);
+
+  useEffect(() => {
+    const offset = scrollAfterHexLoad.current;
+    const element = scroller.current;
+    if (mode !== "hex" || offset === undefined || !element || !hexChunk) return;
+    const frame = requestAnimationFrame(() => {
+      element.scrollTop = hexScrollTopForOffset(offset, element.scrollHeight, element.clientHeight, hexSize);
+      scrollAfterHexLoad.current = undefined;
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [hexChunk, hexSize, mode]);
 
   const onTextScroll = () => {
     cancelAnimationFrame(scrollFrame.current);
@@ -121,14 +156,58 @@ export function Viewer({ file, close, reportCloseError }: ViewerProps) {
     });
   };
 
+  const onHexScroll = () => {
+    cancelAnimationFrame(scrollFrame.current);
+    scrollFrame.current = requestAnimationFrame(() => {
+      const element = scroller.current;
+      if (!element || !hexChunk) return;
+      const target = hexOffsetForScroll(element.scrollTop, element.scrollHeight, element.clientHeight, hexSize);
+      hexPosition.current = target;
+      if (needsHexWindow(target, hexChunk.start, hexChunk.bytes.length, hexSize)) loadHex(target);
+    });
+  };
+
+  const jumpToOffset = () => {
+    try {
+      const offset = parseHexOffset(offsetDialog.value, hexSize);
+      setOffsetDialog({ open: false, value: "", error: "" });
+      setSelectedHexOffset(offset);
+      scrollAfterHexLoad.current = offset;
+      loadHex(offset);
+    } catch (reason) {
+      setOffsetDialog(value => ({ ...value, error: reason instanceof Error ? reason.message : String(reason) }));
+    }
+  };
+
   const content = () => {
     if (error) return <Alert severity="error">{error}</Alert>;
     if (mode === "image") return <Typography>Режим изображений будет реализован в Issue #23.</Typography>;
     if (mode === "unknown") return <Typography>Формат файла не поддерживается. Выберите текстовый или HEX-режим.</Typography>;
     if (mode === "hex") {
-      if (!bytes) return <CircularProgress aria-label="Чтение файла" />;
-      return <Box component="pre" aria-label="HEX файла" sx={{ m: 0, minWidth: "100%", width: "max-content", whiteSpace: "pre",
-        fontFamily: "monospace", fontSize: 13 }}>{hexPreview(bytes)}</Box>;
+      if (!hexChunk) return <CircularProgress aria-label="Чтение файла" />;
+      if (hexSize === 0n) return <Typography color="text.secondary">Файл пуст.</Typography>;
+      return <Box aria-label="HEX файла" sx={{ minWidth: "100%", width: "max-content", fontFamily: "monospace", fontSize: 13 }}>
+        <Box sx={{ height: hexLayout?.topHeight ?? 0 }} />
+        {hexPreviewRows(hexChunk.bytes, hexChunk.start).map(row => <Box key={row.offset.toString()} sx={{ display: "flex", height: "18px", lineHeight: "18px" }}>
+          <Box component="span" sx={{ mr: 2 }}>{row.address}</Box>
+          <Box component="span" sx={{ display: "flex", mr: 2 }}>
+            {Array.from({ length: 16 }, (_, index) => {
+              const absolute = row.offset + BigInt(index);
+              const selected = absolute === selectedHexOffset;
+              return <Box component="span" key={index} sx={{ width: "3ch", ml: index === 8 ? "1ch" : 0,
+                bgcolor: selected ? "primary.main" : undefined, color: selected ? "primary.contrastText" : undefined }}>
+                {row.values[index] === undefined ? "  " : row.values[index].toString(16).padStart(2, "0")}
+              </Box>;
+            })}
+          </Box>
+          <Box component="span">|{row.ascii.map((character, index) => {
+            const selected = row.offset + BigInt(index) === selectedHexOffset;
+            return <Box component="span" key={index} sx={{ bgcolor: selected ? "primary.main" : undefined,
+              color: selected ? "primary.contrastText" : undefined }}>{character}</Box>;
+          })}|</Box>
+        </Box>)}
+        <Box sx={{ height: hexLayout?.bottomHeight ?? 0 }} />
+      </Box>;
     }
     if (!textChunk) return <CircularProgress aria-label="Чтение файла" />;
     if (fileSize === 0n) return <Typography color="text.secondary">Файл пуст.</Typography>;
@@ -161,19 +240,40 @@ export function Viewer({ file, close, reportCloseError }: ViewerProps) {
     <Menu anchorEl={menu?.anchor} open={!!menu} onClose={() => setMenu(undefined)}>
       {menu?.name === "file" && <MenuItem onClick={closeViewer}>Закрыть <Box component="span" sx={{ ml: 4, opacity: .7 }}>Esc</Box></MenuItem>}
       {menu?.name === "edit" && <MenuItem disabled>Команды редактирования недоступны</MenuItem>}
-      {menu?.name === "view" && viewerModes.map(item => <MenuItem key={item.id} selected={mode === item.id}
-        disabled={!item.available} title={item.note} onClick={() => chooseMode(item.id)}>{item.label}{item.note && " — не готово"}</MenuItem>)}
+      {menu?.name === "view" && [
+        ...viewerModes.map(item => <MenuItem key={item.id} selected={mode === item.id}
+          disabled={!item.available} title={item.note} onClick={() => chooseMode(item.id)}>{item.label}{item.note && " — не готово"}</MenuItem>),
+        <Divider key="offset-divider" />,
+        <MenuItem key="offset" disabled={mode !== "hex"} onClick={() => { setMenu(undefined); setOffsetDialog({ open: true,
+          value: selectedHexOffset?.toString() ?? hexPosition.current.toString(), error: "" }); }}>Перейти к смещению…</MenuItem>,
+      ]}
     </Menu>
     <Divider />
     <Box sx={{ px: 2, py: 1, bgcolor: "background.paper" }}>
       <Typography variant="body2" sx={{ fontFamily: "monospace", overflowWrap: "anywhere" }}>{file.path}</Typography>
       <Typography variant="caption" color="text.secondary">
-        {fileSize.toLocaleString("ru-RU")} байт · только чтение{mode === "text" ? ` · ${status}` : ` · показаны первые ${previewSize.toLocaleString("ru-RU")} байт`}
+        {fileSize.toLocaleString("ru-RU")} байт · только чтение{mode === "text" ? ` · ${status}`
+          : mode === "hex" && hexChunk ? ` · окно ${hexChunk.start.toString(16).toUpperCase().padStart(8, "0")}h` : ""}
       </Typography>
     </Box>
     <Divider />
-    <Box ref={scroller} onScroll={mode === "text" ? onTextScroll : undefined} sx={{ flex: 1, minHeight: 0, overflow: "auto", p: 2 }}>
+    <Box ref={scroller} onScroll={mode === "text" ? onTextScroll : mode === "hex" ? onHexScroll : undefined}
+      sx={{ flex: 1, minHeight: 0, overflow: "auto", p: 2 }}>
       {content()}
     </Box>
+    <Dialog open={offsetDialog.open} onClose={() => setOffsetDialog(value => ({ ...value, open: false }))}
+      slotProps={{ paper: { component: "form", onSubmit: event => { event.preventDefault(); jumpToOffset(); } } }}>
+      <DialogTitle>Перейти к смещению</DialogTitle>
+      <DialogContent sx={{ minWidth: { xs: 280, sm: 420 } }}>
+        {offsetDialog.error && <Alert severity="error" sx={{ mb: 1 }}>{offsetDialog.error}</Alert>}
+        <TextField autoFocus fullWidth label="Смещение (DEC или HEX)" placeholder="4096 или 0x1000"
+          value={offsetDialog.value} error={!!offsetDialog.error}
+          onChange={event => setOffsetDialog(value => ({ ...value, value: event.target.value, error: "" }))} />
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={() => setOffsetDialog(value => ({ ...value, open: false }))}>Отмена</Button>
+        <Button type="submit" variant="contained" disabled={!offsetDialog.value.trim()}>Перейти</Button>
+      </DialogActions>
+    </Dialog>
   </Paper>;
 }
