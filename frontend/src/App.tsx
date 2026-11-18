@@ -20,9 +20,7 @@ import { OperationsCenter } from "./OperationsCenter";
 import { CopyDialog } from "./CopyDialog";
 import type { Operation } from "../bindings/github.com/rikkimongoose/marten-commander/internal/operations/models";
 import { moveFocusCandidates, operationRefreshLocations } from "./operationRefresh";
-import { CloseFile, OpenFile } from "../bindings/github.com/rikkimongoose/marten-commander/internal/desktop/viewerservice";
-import type { ViewerFile } from "../bindings/github.com/rikkimongoose/marten-commander/internal/desktop/models";
-import { Viewer } from "./Viewer";
+import { OpenViewer } from "../bindings/github.com/rikkimongoose/marten-commander/internal/desktop/viewerwindowservice";
 
 type MkdirDialogState = { open: boolean; destination: string; busy: boolean; error: string };
 type CopyDialogState = { open: boolean; sources: string[]; destination: string; busy: boolean; error: string };
@@ -33,8 +31,6 @@ export default function App() {
   const left = useRef<FilePanelHandle>(null);
   const right = useRef<FilePanelHandle>(null);
   const [commandError, setCommandError] = useState("");
-  const [viewer, setViewer] = useState<ViewerFile>();
-  const viewerRef = useRef<ViewerFile>();
   const [mkdirDialog, setMkdirDialog] = useState<MkdirDialogState>({ open: false, destination: "", busy: false, error: "" });
   const mkdirResolve = useRef<((result: MkdirPromptResult) => void)>();
   const [copyDialog, setCopyDialog] = useState<CopyDialogState>({ open: false, sources: [], destination: "", busy: false, error: "" });
@@ -93,12 +89,7 @@ export default function App() {
       prompt: { open: openCopyDialog, retry: retryCopyDialog, complete: closeCopyDialog },
     }, {
       prompt: { open: openMoveDialog, retry: retryMoveDialog, complete: closeMoveDialog },
-    }, OpenFile, file => {
-      const previous = viewerRef.current;
-      viewerRef.current = file;
-      setViewer(file);
-      if (previous) void CloseFile(previous.id);
-    });
+    }, OpenViewer);
     return dispatcher;
   });
 
@@ -254,11 +245,6 @@ export default function App() {
             ? "Новое имя переименует объект на месте. Существующий каталог переместит его без переименования; полный новый путь выполнит оба действия."
             : "Для нескольких объектов укажите абсолютный путь существующего каталога."}
           validateDestination={destination => moveDestinationError(destination, moveDialog.sources.length)} />
-        {viewer && <Viewer file={viewer} reportCloseError={setCommandError} close={() => {
-          viewerRef.current = undefined;
-          setViewer(undefined);
-          queueMicrotask(focusActivePanel);
-        }} />}
       </Box>
     </AgGridProvider>
   );

@@ -5,12 +5,14 @@ import * as CommandService from "./commandservice.js";
 import * as DirectoryService from "./directoryservice.js";
 import * as OperationService from "./operationservice.js";
 import * as ViewerService from "./viewerservice.js";
+import * as ViewerWindowService from "./viewerwindowservice.js";
 import * as VolumeService from "./volumeservice.js";
 export {
     CommandService,
     DirectoryService,
     OperationService,
     ViewerService,
+    ViewerWindowService,
     VolumeService
 };
 

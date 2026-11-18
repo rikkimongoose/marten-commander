@@ -13,6 +13,7 @@ import (
 	"github.com/rikkimongoose/marten-commander/internal/viewer"
 	"github.com/rikkimongoose/marten-commander/internal/volumes"
 	"github.com/wailsapp/wails/v3/pkg/application"
+	"github.com/wailsapp/wails/v3/pkg/events"
 )
 
 //go:embed all:frontend/dist
@@ -44,12 +45,21 @@ func main() {
 	operationService := desktop.NewOperationService(operationManager)
 	trashService := app.NewTrashService(localfs.SystemTrash{}, operationManager)
 	viewerService := desktop.NewViewerService(viewer.LocalFileSource{})
-	desktopApp := application.New(application.Options{
+	var desktopApp *application.App
+	viewerWindows := desktop.NewViewerWindowService(viewerService, func(options desktop.ViewerWindowOptions) (desktop.ViewerWindow, error) {
+		window := desktopApp.Window.NewWithOptions(application.WebviewWindowOptions{
+			Name: options.Name, Title: options.Title, URL: options.URL, Width: options.Width, Height: options.Height,
+			MinWidth: 480, MinHeight: 320, Hidden: true,
+		})
+		return nativeViewerWindow{window}, nil
+	})
+	desktopApp = application.New(application.Options{
 		Name: "Marten Commander", Description: "Двухпанельный файловый менеджер",
 		Services: []application.Service{
 			application.NewService(desktop.NewDirectoryService(directories, initialIsHome)),
 			application.NewService(desktop.NewCommandServiceWithTrash(files, editor, copyService, moveService, terminal, trashService)),
 			application.NewService(viewerService),
+			application.NewService(viewerWindows),
 			application.NewService(desktop.NewVolumeService(volumes.NewService())),
 			application.NewService(operationService),
 		},
@@ -67,4 +77,15 @@ func main() {
 	if err := desktopApp.Run(); err != nil {
 		log.Fatal(err)
 	}
+}
+
+type nativeViewerWindow struct{ *application.WebviewWindow }
+
+func (w nativeViewerWindow) Show() error {
+	w.WebviewWindow.Show()
+	return nil
+}
+
+func (w nativeViewerWindow) OnClosing(callback func()) {
+	w.WebviewWindow.RegisterHook(events.Common.WindowClosing, func(*application.WindowEvent) { callback() })
 }

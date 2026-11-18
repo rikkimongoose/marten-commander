@@ -8,7 +8,7 @@ import react from "@vitejs/plugin-react";
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || "playwright-core");
 const server = await createServer({
   configFile: false, root: fileURLToPath(new URL("../../", import.meta.url)), plugins: [react()],
-  resolve: { alias: [{ find: /.*bindings\/.*\/desktop\/(commandservice|directoryservice|operationservice|volumeservice|viewerservice)(\.[jt]s)?$/,
+  resolve: { alias: [{ find: /.*bindings\/.*\/desktop\/(commandservice|directoryservice|operationservice|volumeservice|viewerservice|viewerwindowservice)(\.[jt]s)?$/,
     replacement: fileURLToPath(new URL("navigationBackend.ts", import.meta.url)) }] },
   server: { host: "127.0.0.1", port: 0 },
 });
@@ -17,12 +17,14 @@ try {
   await server.listen();
   browser = await chromium.launch({ executablePath: process.env.CHROME_PATH || "/opt/google/chrome/chrome", headless: true });
   const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
-  await page.route("**/viewer-image/**", route => route.fulfill({ status: 200, contentType: "image/png",
+  const routeImages = target => target.route("**/viewer-image/**", route => route.fulfill({ status: 200, contentType: "image/png",
     body: route.request().url().includes("viewer-broken") ? Buffer.from("broken image")
       : Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64") }));
+  await routeImages(page);
   const errors = [];
   page.on("pageerror", error => errors.push(error.message));
-  await page.goto(server.resolvedUrls.local[0]);
+  const appURL = server.resolvedUrls.local[0];
+  await page.goto(appURL);
   const home = "/home/test";
   const panel = side => page.getByRole("region", { name: side === "left" ? "Левая панель" : "Правая панель" });
   const cell = (side, id) => panel(side).locator(`.ag-row[row-id="${id}"] .ag-cell[col-id="name"]`);
@@ -116,36 +118,60 @@ try {
   assert.equal(await panel("left").getAttribute("data-active"), "true", "Tab in command line does not switch panels");
   await focused("left", "..");
 
-  // Viewer keeps one bounded text window, switches encoding from original
-  // bytes and closes without disturbing the panels or v0.2 commands.
+  // Each F3 creates a separate native-window request; the main application
+  // remains interactive and never renders a Viewer overlay.
   await cell("left", `${home}/one.txt`).click(); await functionButtons.nth(0).click();
-  const viewer = page.getByRole("region", { name: "Просмотр файла" });
+  await cell("left", `${home}/two.txt`).click(); await functionButtons.nth(0).click();
+  await page.waitForFunction(() => window.navigationTest.viewerWindows.length === 2);
+  assert.notEqual(...await page.evaluate(() => window.navigationTest.viewerWindows));
+  assert.equal(await page.getByRole("region", { name: "Просмотр файла" }).count(), 0);
+  await cell("left", `${home}/two.txt`).click();
+  await focused("left", `${home}/two.txt`);
+
+  // Separate pages model independent WebViews while retaining the production
+  // Viewer component and generated service seam.
+  const textPage = await browser.newPage({ viewport: { width: 960, height: 720 } });
+  await textPage.goto(`${appURL}?viewer=viewer-text&viewerMode=text`);
+  const viewer = textPage.getByRole("region", { name: "Просмотр файла" });
   await viewer.getByLabel("Текст файла").waitFor();
   assert.match(await viewer.textContent(), /Auto · UTF-8 · проверка UTF-8/);
   assert.equal(await viewer.locator('pre[aria-label="Текст файла"]').count(), 1);
   const viewerScroller = viewer.locator('[aria-label="Текст файла"]').locator("xpath=../..");
   assert.ok(await viewerScroller.evaluate(element => element.scrollHeight > element.clientHeight), "large file has a virtual scrollbar");
   await viewer.getByRole("combobox", { name: "Кодировка" }).click();
-  await page.getByRole("option", { name: "KOI8-R" }).click();
+  await textPage.getByRole("option", { name: "KOI8-R" }).click();
   await viewer.getByText("текст KOI8-R").waitFor();
   assert.match(await viewer.textContent(), /Вручную · KOI8-R · ручной выбор/);
-  await page.keyboard.press("Escape");
-  await viewer.waitFor({ state: "hidden" });
-  assert.equal(await page.evaluate(() => window.navigationTest.viewerClosed), 1);
-  await focused("left", `${home}/one.txt`);
+  const textPageB = await browser.newPage({ viewport: { width: 960, height: 720 } });
+  await textPageB.goto(`${appURL}?viewer=viewer-text-b&viewerMode=text`);
+  const textViewerB = textPageB.getByRole("region", { name: "Просмотр файла" });
+  await textViewerB.getByLabel("Текст файла").waitFor();
+  assert.match(await textViewerB.textContent(), /Auto · UTF-8 · проверка UTF-8/);
+  assert.match(await viewer.textContent(), /Вручную · KOI8-R · ручной выбор/,
+    "changing encoding in B must not reset A");
+  await textViewerB.getByRole("button", { name: "Файл" }).click();
+  await textPageB.getByRole("menuitem", { name: /Закрыть/ }).click();
+  await textPageB.waitForFunction(() => window.navigationTest.viewerClosed === 1);
+  assert.match(await viewer.textContent(), /Вручную · KOI8-R · ручной выбор/,
+    "closing B through the menu must not affect A");
+  await textPageB.close();
+  await textPage.keyboard.press("Escape");
+  await textPage.waitForFunction(() => window.navigationTest.viewerClosed === 1);
+  await textPage.close();
 
   // A 5 GiB HEX file keeps a bounded DOM window. Rapid scrollbar movement is
   // coalesced, and a direct >4 GiB jump issues one bounded range request.
-  await page.evaluate(() => { window.navigationTest.viewerMode = "hex"; window.navigationTest.viewerBinaryReads.length = 0; });
-  await functionButtons.nth(0).click();
-  await viewer.getByLabel("HEX файла").waitFor();
-  const hexScroller = viewer.getByLabel("HEX файла").locator("xpath=..");
-  const openingReads = await page.evaluate(() => window.navigationTest.viewerBinaryReads);
+  const hexPage = await browser.newPage({ viewport: { width: 960, height: 720 } });
+  await hexPage.goto(`${appURL}?viewer=viewer-hex&viewerMode=hex`);
+  const hexViewer = hexPage.getByRole("region", { name: "Просмотр файла" });
+  await hexViewer.getByLabel("HEX файла").waitFor();
+  const hexScroller = hexViewer.getByLabel("HEX файла").locator("xpath=..");
+  const openingReads = await hexPage.evaluate(() => window.navigationTest.viewerBinaryReads);
   assert.ok(openingReads.length <= 2, "HEX open performs one production read (at most two under React StrictMode)");
   assert.ok(openingReads.every(read => read.length <= 64 * 1024), "every HEX request is bounded");
   assert.ok(await hexScroller.evaluate(element => element.scrollHeight > element.clientHeight), "HEX file has a virtual scrollbar");
-  assert.ok(await viewer.locator("[data-hex-row]").count() <= 64, "HEX DOM rows stay near the viewport size");
-  const readsBeforeScroll = await page.evaluate(() => window.navigationTest.viewerBinaryReads.length);
+  assert.ok(await hexViewer.locator("[data-hex-row]").count() <= 64, "HEX DOM rows stay near the viewport size");
+  const readsBeforeScroll = await hexPage.evaluate(() => window.navigationTest.viewerBinaryReads.length);
   await hexScroller.evaluate(async element => {
     for (let index = 1; index <= 20; index++) {
       element.scrollTop = (element.scrollHeight - element.clientHeight) * index / 20;
@@ -153,55 +179,66 @@ try {
       await new Promise(requestAnimationFrame);
     }
   });
-  await page.waitForTimeout(150);
-  const readsAfterScroll = await page.evaluate(() => window.navigationTest.viewerBinaryReads.length);
+  await hexPage.waitForTimeout(150);
+  const readsAfterScroll = await hexPage.evaluate(() => window.navigationTest.viewerBinaryReads.length);
   assert.ok(readsAfterScroll - readsBeforeScroll <= 1, "rapid HEX scroll coalesces range requests");
-  await viewer.getByRole("button", { name: "Вид" }).click();
-  await page.getByRole("menuitem", { name: /Перейти к смещению/ }).click();
-  await page.getByRole("textbox", { name: "Смещение (DEC или HEX)" }).fill("4096");
-  await page.getByRole("button", { name: "Перейти" }).click();
-  const row4096 = viewer.locator("[data-hex-row]", { hasText: /^00001000/ });
+  await hexViewer.getByRole("button", { name: "Вид" }).click();
+  await hexPage.getByRole("menuitem", { name: /Перейти к смещению/ }).click();
+  await hexPage.getByRole("textbox", { name: "Смещение (DEC или HEX)" }).fill("4096");
+  await hexPage.getByRole("button", { name: "Перейти" }).click();
+  const row4096 = hexViewer.locator("[data-hex-row]", { hasText: /^00001000/ });
   await row4096.waitFor();
   const [row4096Box, hexScrollerBox] = await Promise.all([row4096.boundingBox(), hexScroller.boundingBox()]);
   assert.ok(row4096Box && hexScrollerBox && row4096Box.y >= hexScrollerBox.y &&
     row4096Box.y + row4096Box.height <= hexScrollerBox.y + hexScrollerBox.height,
   "4096-byte jump places address 00001000 inside the viewport");
-  await viewer.getByRole("button", { name: "Вид" }).click();
-  await page.getByRole("menuitem", { name: /Перейти к смещению/ }).click();
-  await page.getByRole("textbox", { name: "Смещение (DEC или HEX)" }).fill("0x100000000");
-  await page.getByRole("button", { name: "Перейти" }).click();
-  await page.waitForFunction(() => window.navigationTest.viewerBinaryReads.some(read => BigInt(read.offset) > 0xffffffffn));
-  assert.ok(await viewer.locator("[data-hex-row]").count() <= 64, "jump keeps the HEX DOM bounded");
-  await page.keyboard.press("Escape");
-  await viewer.waitFor({ state: "hidden" });
-  assert.equal(await page.evaluate(() => window.navigationTest.viewerClosed), 2);
-  await page.evaluate(() => { window.navigationTest.viewerMode = "text"; });
-  await focused("left", `${home}/one.txt`);
+  await hexViewer.getByRole("button", { name: "Вид" }).click();
+  await hexPage.getByRole("menuitem", { name: /Перейти к смещению/ }).click();
+  await hexPage.getByRole("textbox", { name: "Смещение (DEC или HEX)" }).fill("0x100000000");
+  await hexPage.getByRole("button", { name: "Перейти" }).click();
+  await hexPage.waitForFunction(() => window.navigationTest.viewerBinaryReads.some(read => BigInt(read.offset) > 0xffffffffn));
+  assert.ok(await hexViewer.locator("[data-hex-row]").count() <= 64, "jump keeps the HEX DOM bounded");
+  const hexPageB = await browser.newPage({ viewport: { width: 960, height: 720 } });
+  await hexPageB.goto(`${appURL}?viewer=viewer-hex-b&viewerMode=hex`);
+  const hexViewerB = hexPageB.getByRole("region", { name: "Просмотр файла" });
+  await hexViewerB.getByLabel("HEX файла").waitFor();
+  const addressA = await hexViewer.locator("[data-hex-row] > span").first().textContent();
+  const addressB = await hexViewerB.locator("[data-hex-row] > span").first().textContent();
+  assert.ok(BigInt(`0x${addressA}`) > 0xffffffffn);
+  assert.equal(BigInt(`0x${addressB}`), 0n, "HEX offset in B must stay independent from A");
+  await hexPageB.close();
+  await hexPage.close();
 
   // Image mode uses the existing viewer session and native asset URL. Fit and
   // 100% preserve natural dimensions; zoom controls remain available.
-  await page.evaluate(() => { window.navigationTest.viewerMode = "image"; });
-  await functionButtons.nth(0).click();
-  const image = viewer.getByRole("img", { name: "picture without extension" });
+  const imagePage = await browser.newPage({ viewport: { width: 960, height: 720 } });
+  await routeImages(imagePage);
+  await imagePage.goto(`${appURL}?viewer=viewer-image&viewerMode=image`);
+  const imageViewer = imagePage.getByRole("region", { name: "Просмотр файла" });
+  const image = imageViewer.getByRole("img", { name: "picture without extension" });
   await image.waitFor();
-  await viewer.getByRole("button", { name: "100%" }).click();
+  await imageViewer.getByRole("button", { name: "100%" }).click();
   assert.deepEqual(await image.evaluate(element => ({ naturalWidth: element.naturalWidth, naturalHeight: element.naturalHeight,
     width: element.getBoundingClientRect().width, height: element.getBoundingClientRect().height })),
   { naturalWidth: 1, naturalHeight: 1, width: 1, height: 1 });
-  await viewer.getByRole("button", { name: "Увеличить изображение" }).click();
-  assert.equal(await viewer.getByText("125%").count(), 1);
-  await viewer.getByRole("button", { name: "Вписать" }).click();
-  await page.keyboard.press("Escape");
-  await viewer.waitFor({ state: "hidden" });
-  assert.equal(await page.evaluate(() => window.navigationTest.viewerClosed), 3);
-  await page.evaluate(() => { window.navigationTest.viewerBroken = true; });
-  await functionButtons.nth(0).click();
-  await viewer.getByText(/Не удалось декодировать изображение/).waitFor();
-  await page.keyboard.press("Escape");
-  await viewer.waitFor({ state: "hidden" });
-  assert.equal(await page.evaluate(() => window.navigationTest.viewerClosed), 4);
-  await page.evaluate(() => { window.navigationTest.viewerMode = "text"; window.navigationTest.viewerBroken = false; });
-  await focused("left", `${home}/one.txt`);
+  await imageViewer.getByRole("button", { name: "Увеличить изображение" }).click();
+  assert.equal(await imageViewer.getByText("125%").count(), 1);
+  const imagePageB = await browser.newPage({ viewport: { width: 960, height: 720 } });
+  await routeImages(imagePageB);
+  await imagePageB.goto(`${appURL}?viewer=viewer-image-b&viewerMode=image`);
+  const imageViewerB = imagePageB.getByRole("region", { name: "Просмотр файла" });
+  await imageViewerB.getByRole("img", { name: "picture without extension" }).waitFor();
+  assert.equal(await imageViewer.getByText("125%").count(), 1);
+  assert.match(await imageViewerB.getByRole("button", { name: "Вписать" }).getAttribute("class"), /MuiButton-contained/,
+    "image B must retain Fit while A is zoomed");
+  await imagePageB.close();
+  await imagePage.close();
+  const brokenPage = await browser.newPage({ viewport: { width: 960, height: 720 } });
+  await routeImages(brokenPage);
+  await brokenPage.goto(`${appURL}?viewer=viewer-broken&viewerMode=image&viewerBroken=1`);
+  await brokenPage.getByText(/Не удалось декодировать изображение/).waitFor();
+  await brokenPage.close();
+  await focused("left", `${home}/two.txt`);
 
   // Compact path header edits the panel path; Escape cancels and Enter uses
   // the same guarded panel loader.

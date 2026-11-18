@@ -106,7 +106,7 @@ export function registerFileCommands(
     execute: async request => {
       const source = sourceAndTarget(request.context).source;
       if (!source.focusedViewLocation) throw new CommandError("unavailable", "Установите курсор на файл.");
-      const open = openViewer ?? (await import("../bindings/github.com/rikkimongoose/marten-commander/internal/desktop/viewerservice")).OpenFile;
+      const open = openViewer ?? (await import("../bindings/github.com/rikkimongoose/marten-commander/internal/desktop/viewerwindowservice")).OpenViewer;
       const file = await open(source.focusedViewLocation);
       showViewer?.(file);
     },

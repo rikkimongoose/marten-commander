@@ -4,13 +4,14 @@ const entry = (id: string, directory = false) => ({ id, name: id.split("/").at(-
   kind: directory ? "directory" : "file", navigable: directory, hidden: false,
   extension: directory ? "" : "txt", size: directory ? "" : "5", modifiedAt: "2026-01-01T00:00:00.000000000Z", detail: "" });
 const home = "/home/test";
-const initialRoot = new URLSearchParams(window.location.search).has("emptyRoot");
+const query = new URLSearchParams(window.location.search);
+const initialRoot = query.has("emptyRoot");
 const state = { trashed: new Set<string>(), previews: [] as any[], reads: [] as string[], opens: [] as any[], openError: "", hold: "",
   release: undefined as (() => void) | undefined, emptyRoot: initialRoot,
   mkdirs: [] as { parent: string; name: string }[], created: new Map<string, string[]>(), holdMkdir: false,
   releaseMkdir: undefined as (() => void) | undefined, operations: [] as any[], conflictResolutions: [] as any[],
-  viewerReads: [] as string[], viewerBinaryReads: [] as { offset: string; length: number }[], viewerMode: "text",
-  viewerBroken: false, viewerClosed: 0 };
+  viewerReads: [] as string[], viewerBinaryReads: [] as { offset: string; length: number }[], viewerMode: query.get("viewerMode") ?? "text",
+  viewerBroken: query.has("viewerBroken"), viewerClosed: 0, viewerWindows: [] as string[] };
 Object.assign(window, { navigationTest: state });
 
 function resolve(path: string, base: string) {
@@ -105,6 +106,16 @@ export function OpenFile() {
     size: hex ? (5n * 1024n * 1024n * 1024n).toString() : image ? "68" : "4294967296",
     modifiedAt: "", initialMode: state.viewerMode, encoding: "utf-8", encodingSource: "heuristic",
     mediaType: image ? "image/png" : "" });
+}
+export function OpenViewer(location: string) {
+  state.viewerWindows.push(location);
+  return OpenFile();
+}
+export function GetViewer(id: string) {
+  const source = OpenFile();
+  const result = source.then(file => ({ ...file, id })) as ReturnType<typeof OpenFile>;
+  result.cancel = source.cancel;
+  return result;
 }
 export function ReadText(_id: string, offset: string, _length: number, encoding: string) {
   state.viewerReads.push(encoding);
