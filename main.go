@@ -43,16 +43,17 @@ func main() {
 	moveService := app.NewMoveService(filesystem, operationManager)
 	operationService := desktop.NewOperationService(operationManager)
 	trashService := app.NewTrashService(localfs.SystemTrash{}, operationManager)
+	viewerService := desktop.NewViewerService(viewer.LocalFileSource{})
 	desktopApp := application.New(application.Options{
 		Name: "Marten Commander", Description: "Двухпанельный файловый менеджер",
 		Services: []application.Service{
 			application.NewService(desktop.NewDirectoryService(directories, initialIsHome)),
 			application.NewService(desktop.NewCommandServiceWithTrash(files, editor, copyService, moveService, terminal, trashService)),
-			application.NewService(desktop.NewViewerService(viewer.LocalFileSource{})),
+			application.NewService(viewerService),
 			application.NewService(desktop.NewVolumeService(volumes.NewService())),
 			application.NewService(operationService),
 		},
-		Assets: application.AssetOptions{Handler: application.AssetFileServerFS(assets)},
+		Assets: application.AssetOptions{Handler: application.AssetFileServerFS(assets), Middleware: desktop.NewViewerImageMiddleware(viewerService)},
 		Mac:    application.MacOptions{ApplicationShouldTerminateAfterLastWindowClosed: true},
 	})
 	if err := operationManager.SetPublisher(func(event operations.Event) {

@@ -9,7 +9,8 @@ const state = { trashed: new Set<string>(), previews: [] as any[], reads: [] as 
   release: undefined as (() => void) | undefined, emptyRoot: initialRoot,
   mkdirs: [] as { parent: string; name: string }[], created: new Map<string, string[]>(), holdMkdir: false,
   releaseMkdir: undefined as (() => void) | undefined, operations: [] as any[], conflictResolutions: [] as any[],
-  viewerReads: [] as string[], viewerBinaryReads: [] as { offset: string; length: number }[], viewerMode: "text", viewerClosed: 0 };
+  viewerReads: [] as string[], viewerBinaryReads: [] as { offset: string; length: number }[], viewerMode: "text",
+  viewerBroken: false, viewerClosed: 0 };
 Object.assign(window, { navigationTest: state });
 
 function resolve(path: string, base: string) {
@@ -98,9 +99,12 @@ function cancellable<T>(value: T) {
 
 export function OpenFile() {
   const hex = state.viewerMode === "hex";
-  return cancellable({ id: "viewer-1", name: hex ? "large.bin" : "one.txt", path: `${home}/${hex ? "large.bin" : "one.txt"}`,
-    size: hex ? (5n * 1024n * 1024n * 1024n).toString() : "4294967296",
-    modifiedAt: "", initialMode: state.viewerMode, encoding: "utf-8", encodingSource: "heuristic" });
+  const image = state.viewerMode === "image";
+  const name = image ? "picture without extension" : hex ? "large.bin" : "one.txt";
+  return cancellable({ id: state.viewerBroken ? "viewer-broken" : "viewer-1", name, path: `${home}/${name}`,
+    size: hex ? (5n * 1024n * 1024n * 1024n).toString() : image ? "68" : "4294967296",
+    modifiedAt: "", initialMode: state.viewerMode, encoding: "utf-8", encodingSource: "heuristic",
+    mediaType: image ? "image/png" : "" });
 }
 export function ReadText(_id: string, offset: string, _length: number, encoding: string) {
   state.viewerReads.push(encoding);

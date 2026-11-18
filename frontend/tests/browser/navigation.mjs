@@ -17,6 +17,9 @@ try {
   await server.listen();
   browser = await chromium.launch({ executablePath: process.env.CHROME_PATH || "/opt/google/chrome/chrome", headless: true });
   const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
+  await page.route("**/viewer-image/**", route => route.fulfill({ status: 200, contentType: "image/png",
+    body: route.request().url().includes("viewer-broken") ? Buffer.from("broken image")
+      : Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64") }));
   const errors = [];
   page.on("pageerror", error => errors.push(error.message));
   await page.goto(server.resolvedUrls.local[0]);
@@ -173,6 +176,31 @@ try {
   await viewer.waitFor({ state: "hidden" });
   assert.equal(await page.evaluate(() => window.navigationTest.viewerClosed), 2);
   await page.evaluate(() => { window.navigationTest.viewerMode = "text"; });
+  await focused("left", `${home}/one.txt`);
+
+  // Image mode uses the existing viewer session and native asset URL. Fit and
+  // 100% preserve natural dimensions; zoom controls remain available.
+  await page.evaluate(() => { window.navigationTest.viewerMode = "image"; });
+  await functionButtons.nth(0).click();
+  const image = viewer.getByRole("img", { name: "picture without extension" });
+  await image.waitFor();
+  await viewer.getByRole("button", { name: "100%" }).click();
+  assert.deepEqual(await image.evaluate(element => ({ naturalWidth: element.naturalWidth, naturalHeight: element.naturalHeight,
+    width: element.getBoundingClientRect().width, height: element.getBoundingClientRect().height })),
+  { naturalWidth: 1, naturalHeight: 1, width: 1, height: 1 });
+  await viewer.getByRole("button", { name: "Увеличить изображение" }).click();
+  assert.equal(await viewer.getByText("125%").count(), 1);
+  await viewer.getByRole("button", { name: "Вписать" }).click();
+  await page.keyboard.press("Escape");
+  await viewer.waitFor({ state: "hidden" });
+  assert.equal(await page.evaluate(() => window.navigationTest.viewerClosed), 3);
+  await page.evaluate(() => { window.navigationTest.viewerBroken = true; });
+  await functionButtons.nth(0).click();
+  await viewer.getByText(/Не удалось декодировать изображение/).waitFor();
+  await page.keyboard.press("Escape");
+  await viewer.waitFor({ state: "hidden" });
+  assert.equal(await page.evaluate(() => window.navigationTest.viewerClosed), 4);
+  await page.evaluate(() => { window.navigationTest.viewerMode = "text"; window.navigationTest.viewerBroken = false; });
   await focused("left", `${home}/one.txt`);
 
   // Compact path header edits the panel path; Escape cancels and Enter uses

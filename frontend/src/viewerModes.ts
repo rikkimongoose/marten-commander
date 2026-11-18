@@ -3,7 +3,7 @@ export type ViewerMode = "text" | "hex" | "image" | "unknown";
 export const viewerModes: readonly { id: ViewerMode; label: string; available: boolean; note?: string }[] = Object.freeze([
   { id: "text", label: "Текст", available: true },
   { id: "hex", label: "HEX", available: true },
-  { id: "image", label: "Изображение", available: false, note: "Будет реализовано в Issue #23" },
+  { id: "image", label: "Изображение", available: true },
 ]);
 
 export function normalizeViewerMode(value: string): ViewerMode {

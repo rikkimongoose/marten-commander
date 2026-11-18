@@ -8,10 +8,12 @@ import (
 	"fmt"
 	"io"
 	"mime"
+	"net/http"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 	"unicode/utf8"
 
 	"github.com/rikkimongoose/marten-commander/internal/viewer"
@@ -26,6 +28,7 @@ type ViewerFile struct {
 	InitialMode    string `json:"initialMode"`
 	Encoding       string `json:"encoding"`
 	EncodingSource string `json:"encodingSource"`
+	MediaType      string `json:"mediaType"`
 }
 
 type ViewerChunk struct {
@@ -50,6 +53,9 @@ type viewerSession struct {
 	file      viewer.File
 	size      int64
 	detection viewer.EncodingDetection
+	name      string
+	mediaType string
+	modified  time.Time
 	ctx       context.Context
 	cancel    context.CancelFunc
 }
@@ -96,12 +102,107 @@ func (s *ViewerService) OpenFile(ctx context.Context, location string) (ViewerFi
 	s.mu.Lock()
 	detection := viewer.DetectEncoding(sample)
 	sessionCtx, cancel := context.WithCancel(context.Background())
-	s.files[id] = &viewerSession{file: f, size: meta.Size, detection: detection, ctx: sessionCtx, cancel: cancel}
+	modified, _ := time.Parse(time.RFC3339Nano, meta.ModifiedAt)
+	mediaType := detectImageType(sample)
+	s.files[id] = &viewerSession{file: f, size: meta.Size, detection: detection, name: meta.Name,
+		mediaType: mediaType, modified: modified, ctx: sessionCtx, cancel: cancel}
 	s.mu.Unlock()
 	keep = true
 	return ViewerFile{ID: id, Name: meta.Name, Path: meta.Path, Size: strconv.FormatInt(meta.Size, 10),
 		ModifiedAt: meta.ModifiedAt, InitialMode: detectMode(meta.Name, sample),
-		Encoding: string(detection.Encoding), EncodingSource: detection.Source}, nil
+		Encoding: string(detection.Encoding), EncodingSource: detection.Source, MediaType: mediaType}, nil
+}
+
+const viewerImagePath = "/viewer-image/"
+
+// NewViewerImageMiddleware streams encoded images from existing viewer sessions.
+// It avoids copying the complete file through the Wails JSON/Base64 bridge and
+// lets the webview decoder consume HTTP ranges directly.
+func NewViewerImageMiddleware(s *ViewerService) func(http.Handler) http.Handler {
+	return s.imageMiddleware
+}
+
+func (s *ViewerService) imageMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, viewerImagePath) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.Header().Set("Allow", "GET, HEAD")
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		id := strings.TrimPrefix(r.URL.Path, viewerImagePath)
+		if id == "" || strings.Contains(id, "/") {
+			http.NotFound(w, r)
+			return
+		}
+		s.mu.RLock()
+		session := s.files[id]
+		s.mu.RUnlock()
+		if session == nil {
+			http.NotFound(w, r)
+			return
+		}
+		if session.mediaType == "" {
+			http.Error(w, "unsupported image format", http.StatusUnsupportedMediaType)
+			return
+		}
+		ctx, cancel := context.WithCancel(r.Context())
+		stopSessionCancel := context.AfterFunc(session.ctx, cancel)
+		defer stopSessionCancel()
+		defer cancel()
+		w.Header().Set("Content-Type", session.mediaType)
+		w.Header().Set("Content-Disposition", "inline")
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		http.ServeContent(w, r, session.name, session.modified, &viewerImageReader{ctx: ctx, file: session.file, size: session.size})
+	})
+}
+
+type viewerImageReader struct {
+	ctx    context.Context
+	file   viewer.File
+	size   int64
+	offset int64
+}
+
+func (r *viewerImageReader) Read(buffer []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	if r.offset >= r.size {
+		return 0, io.EOF
+	}
+	length := min(len(buffer), viewer.MaxReadSize)
+	length = min(length, int(r.size-r.offset))
+	data, err := r.file.ReadAt(r.ctx, r.offset, length)
+	n := copy(buffer, data)
+	r.offset += int64(n)
+	if n > 0 && errors.Is(err, io.EOF) {
+		err = nil
+	}
+	return n, err
+}
+
+func (r *viewerImageReader) Seek(offset int64, whence int) (int64, error) {
+	var next int64
+	switch whence {
+	case io.SeekStart:
+		next = offset
+	case io.SeekCurrent:
+		next = r.offset + offset
+	case io.SeekEnd:
+		next = r.size + offset
+	default:
+		return 0, fmt.Errorf("viewer image: invalid seek origin")
+	}
+	if next < 0 {
+		return 0, fmt.Errorf("viewer image: negative seek position")
+	}
+	r.offset = next
+	return next, nil
 }
 
 // ReadText decodes one bounded byte-addressed window. The returned next byte
@@ -278,7 +379,7 @@ func newViewerID() (string, error) {
 }
 
 func detectMode(name string, sample []byte) string {
-	if isImage(sample) {
+	if detectImageType(sample) != "" {
 		return "image"
 	}
 	if len(sample) == 0 || looksLikeText(sample) {
@@ -304,10 +405,19 @@ func looksPossiblyLegacyText(data []byte) bool {
 	return controls*20 <= len(data)
 }
 
-func isImage(data []byte) bool {
-	return len(data) >= 8 && string(data[:8]) == "\x89PNG\r\n\x1a\n" ||
-		len(data) >= 3 && string(data[:3]) == "\xff\xd8\xff" ||
-		len(data) >= 6 && (string(data[:6]) == "GIF87a" || string(data[:6]) == "GIF89a")
+func detectImageType(data []byte) string {
+	switch {
+	case len(data) >= 8 && string(data[:8]) == "\x89PNG\r\n\x1a\n":
+		return "image/png"
+	case len(data) >= 3 && string(data[:3]) == "\xff\xd8\xff":
+		return "image/jpeg"
+	case len(data) >= 6 && (string(data[:6]) == "GIF87a" || string(data[:6]) == "GIF89a"):
+		return "image/gif"
+	case len(data) >= 2 && string(data[:2]) == "BM":
+		return "image/bmp"
+	default:
+		return ""
+	}
 }
 
 func looksLikeText(data []byte) bool {

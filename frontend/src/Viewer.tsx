@@ -10,6 +10,7 @@ import { HexLoadScheduler, hexOffsetForScroll, hexScrollTopForOffset, hexVirtual
   parseHexOffset } from "./hexViewer";
 import { byteOffsetForScroll, encodingStatus, needsTextWindow, RequestGeneration, textEncodings, textWindowSize,
   virtualWindowLayout, type TextEncoding } from "./textViewer";
+import { ImageViewer } from "./ImageViewer";
 
 interface ViewerProps {
   file: ViewerFile;
@@ -112,6 +113,12 @@ export function Viewer({ file, close, reportCloseError }: ViewerProps) {
     root.current?.focus();
     if (mode === "text") loadText(textPosition.current, encoding);
     else if (mode === "hex") loadHex(hexPosition.current);
+    else {
+      generation.current.invalidate();
+      void request.current?.cancel("viewer mode changed");
+      setLoading(false);
+      setError("");
+    }
   }, [encoding, loadHex, loadText, mode]);
 
   useEffect(() => () => {
@@ -196,7 +203,7 @@ export function Viewer({ file, close, reportCloseError }: ViewerProps) {
 
   const content = () => {
     if (error) return <Alert severity="error">{error}</Alert>;
-    if (mode === "image") return <Typography>Режим изображений будет реализован в Issue #23.</Typography>;
+    if (mode === "image") return <ImageViewer fileID={file.id} name={file.name} mediaType={file.mediaType} viewport={scroller} />;
     if (mode === "unknown") return <Typography>Формат файла не поддерживается. Выберите текстовый или HEX-режим.</Typography>;
     if (mode === "hex") {
       if (!hexChunk) return <CircularProgress aria-label="Чтение файла" />;
@@ -269,7 +276,8 @@ export function Viewer({ file, close, reportCloseError }: ViewerProps) {
       <Typography variant="body2" sx={{ fontFamily: "monospace", overflowWrap: "anywhere" }}>{file.path}</Typography>
       <Typography variant="caption" color="text.secondary">
         {fileSize.toLocaleString("ru-RU")} байт · только чтение{mode === "text" ? ` · ${status}`
-          : mode === "hex" && hexChunk ? ` · окно ${hexChunk.start.toString(16).toUpperCase().padStart(8, "0")}h` : ""}
+          : mode === "hex" && hexChunk ? ` · окно ${hexChunk.start.toString(16).toUpperCase().padStart(8, "0")}h`
+          : mode === "image" && file.mediaType ? ` · ${file.mediaType}` : ""}
       </Typography>
     </Box>
     <Divider />

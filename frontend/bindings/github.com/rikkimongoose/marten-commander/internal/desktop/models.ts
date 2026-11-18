@@ -112,6 +112,7 @@ export interface ViewerFile {
     "initialMode": string;
     "encoding": string;
     "encodingSource": string;
+    "mediaType": string;
 }
 
 export interface ViewerTextChunk {

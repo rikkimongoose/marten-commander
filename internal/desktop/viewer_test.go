@@ -4,11 +4,15 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strconv"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/rikkimongoose/marten-commander/internal/viewer"
 )
@@ -60,6 +64,7 @@ func (f *viewerFileStub) Close() error { f.closed.Add(1); return nil }
 
 type sparseViewerFile struct {
 	size       int64
+	prefix     []byte
 	lastOffset atomic.Int64
 	readCalls  atomic.Int64
 	requested  atomic.Int64
@@ -83,12 +88,22 @@ func (f *sparseViewerFile) ReadAt(_ context.Context, offset int64, length int) (
 	available := f.size - offset
 	if int64(length) > available {
 		f.returned.Add(available)
-		return make([]byte, int(available)), io.EOF
+		data := make([]byte, int(available))
+		copySparsePrefix(data, offset, f.prefix)
+		return data, io.EOF
 	}
 	f.returned.Add(int64(length))
-	return make([]byte, length), nil
+	data := make([]byte, length)
+	copySparsePrefix(data, offset, f.prefix)
+	return data, nil
 }
 func (f *sparseViewerFile) Close() error { f.closed.Add(1); return nil }
+
+func copySparsePrefix(data []byte, offset int64, prefix []byte) {
+	if offset < int64(len(prefix)) {
+		copy(data, prefix[offset:])
+	}
+}
 
 func TestViewerServiceFiveGiBOpenAndEndJumpAreBounded(t *testing.T) {
 	const size = int64(5) * 1024 * 1024 * 1024
@@ -446,11 +461,132 @@ func TestViewerModeDetectionUsesContent(t *testing.T) {
 		{"unknown.bin", []byte("Привет\n"), "text"},
 		{"empty", nil, "text"},
 		{"photo.bin", []byte("\x89PNG\r\n\x1a\nrest"), "image"},
+		{"wrong.txt", []byte("\xff\xd8\xffrest"), "image"},
 		{"photo.txt", []byte("GIF89arest"), "image"},
+		{"without-extension", []byte("BMrest"), "image"},
 	}
 	for _, test := range tests {
 		if got := detectMode(test.name, test.data); got != test.want {
 			t.Errorf("%s: got %s, want %s", test.name, got, test.want)
 		}
+	}
+}
+
+func TestViewerImageMiddlewareStreamsSupportedContentAndRanges(t *testing.T) {
+	data := append([]byte("\x89PNG\r\n\x1a\n"), []byte("encoded image payload")...)
+	file := &viewerFileStub{data: data}
+	service := NewViewerService(viewerSourceStub{file: file})
+	opened, err := service.OpenFile(context.Background(), encode(filepath.Join(t.TempDir(), "изображение с пробелом.bin")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opened.InitialMode != "image" || opened.MediaType != "image/png" {
+		t.Fatalf("image metadata = %#v", opened)
+	}
+	handler := NewViewerImageMiddleware(service)(http.NotFoundHandler())
+
+	request := httptest.NewRequest(http.MethodGet, viewerImagePath+opened.ID, nil)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || recorder.Header().Get("Content-Type") != "image/png" ||
+		recorder.Header().Get("Cache-Control") != "no-store" || string(recorder.Body.Bytes()) != string(data) {
+		t.Fatalf("image response: status=%d headers=%v body=%q", recorder.Code, recorder.Header(), recorder.Body.Bytes())
+	}
+
+	rangeRequest := httptest.NewRequest(http.MethodGet, viewerImagePath+opened.ID, nil)
+	rangeRequest.Header.Set("Range", "bytes=8-14")
+	rangeRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(rangeRecorder, rangeRequest)
+	if rangeRecorder.Code != http.StatusPartialContent || string(rangeRecorder.Body.Bytes()) != string(data[8:15]) {
+		t.Fatalf("range response: status=%d body=%q", rangeRecorder.Code, rangeRecorder.Body.Bytes())
+	}
+
+	if err := service.CloseFile(opened.ID); err != nil {
+		t.Fatal(err)
+	}
+	closedRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(closedRecorder, httptest.NewRequest(http.MethodGet, viewerImagePath+opened.ID, nil))
+	if closedRecorder.Code != http.StatusNotFound {
+		t.Fatalf("closed image status = %d", closedRecorder.Code)
+	}
+}
+
+func TestViewerLargeImageOpenAndEndRangeStayBounded(t *testing.T) {
+	const size = int64(2) * 1024 * 1024 * 1024
+	file := &sparseViewerFile{size: size, prefix: []byte("\x89PNG\r\n\x1a\n")}
+	service := NewViewerService(viewerSourceStub{file: file})
+	opened, err := service.OpenFile(context.Background(), encode(filepath.Join(t.TempDir(), "large image")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.CloseFile(opened.ID)
+	if opened.MediaType != "image/png" || file.readCalls.Load() != 1 || file.requested.Load() != 512 {
+		t.Fatalf("large image open: metadata=%#v calls=%d requested=%d", opened, file.readCalls.Load(), file.requested.Load())
+	}
+	handler := NewViewerImageMiddleware(service)(http.NotFoundHandler())
+	head := httptest.NewRecorder()
+	handler.ServeHTTP(head, httptest.NewRequest(http.MethodHead, viewerImagePath+opened.ID, nil))
+	if head.Code != http.StatusOK || file.readCalls.Load() != 1 {
+		t.Fatalf("HEAD read image data: status=%d calls=%d", head.Code, file.readCalls.Load())
+	}
+
+	request := httptest.NewRequest(http.MethodGet, viewerImagePath+opened.ID, nil)
+	request.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", size-10, size-1))
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusPartialContent || response.Body.Len() != 10 || file.lastOffset.Load() != size-10 ||
+		file.readCalls.Load() != 2 || file.requested.Load() != 522 || file.maxRequest.Load() != 512 {
+		t.Fatalf("end range was not direct and bounded: status=%d bytes=%d calls=%d requested=%d max=%d offset=%d",
+			response.Code, response.Body.Len(), file.readCalls.Load(), file.requested.Load(), file.maxRequest.Load(), file.lastOffset.Load())
+	}
+}
+
+func TestViewerImageMiddlewareRejectsUnsupportedSessionsAndMethods(t *testing.T) {
+	service := NewViewerService(viewerSourceStub{file: &viewerFileStub{data: []byte("plain text")}})
+	opened, err := service.OpenFile(context.Background(), encode(filepath.Join(t.TempDir(), "plain.txt")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.CloseFile(opened.ID)
+	handler := NewViewerImageMiddleware(service)(http.NotFoundHandler())
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, viewerImagePath+opened.ID, nil))
+	if recorder.Code != http.StatusUnsupportedMediaType {
+		t.Fatalf("unsupported status = %d", recorder.Code)
+	}
+	methodRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(methodRecorder, httptest.NewRequest(http.MethodPost, viewerImagePath+opened.ID, nil))
+	if methodRecorder.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("method status = %d", methodRecorder.Code)
+	}
+}
+
+func TestViewerImageStreamStopsWhenSessionCloses(t *testing.T) {
+	file := &viewerFileStub{data: append([]byte("GIF89a"), make([]byte, 1024)...), entered: make(chan struct{}, 1)}
+	service := NewViewerService(viewerSourceStub{file: file})
+	opened, err := service.OpenFile(context.Background(), encode(filepath.Join(t.TempDir(), "animated.gif")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	file.block = true
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		recorder := httptest.NewRecorder()
+		NewViewerImageMiddleware(service)(http.NotFoundHandler()).ServeHTTP(recorder,
+			httptest.NewRequest(http.MethodGet, viewerImagePath+opened.ID, nil))
+	}()
+	select {
+	case <-file.entered:
+	case <-time.After(time.Second):
+		t.Fatal("image stream did not start reading")
+	}
+	if err := service.CloseFile(opened.ID); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("image stream did not stop after close")
 	}
 }

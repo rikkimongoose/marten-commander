@@ -2,9 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { decodeBase64, hexPreview, normalizeViewerMode, textPreview, viewerEscapeAction, viewerModes } from "../src/viewerModes.ts";
 
-test("viewer exposes working text and hex modes and marks image mode unfinished", () => {
+test("viewer exposes working text, hex and image modes", () => {
   assert.deepEqual(viewerModes.map(mode => [mode.id, mode.available]), [
-    ["text", true], ["hex", true], ["image", false],
+    ["text", true], ["hex", true], ["image", true],
   ]);
   assert.equal(normalizeViewerMode("text"), "text");
   assert.equal(normalizeViewerMode("hex"), "hex");
