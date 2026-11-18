@@ -10,14 +10,25 @@ interface ImageViewerProps {
 }
 
 interface ImageSize { width: number; height: number }
+interface LoadedImage extends ImageSize { source: string }
+
+const checkerboard = {
+  backgroundColor: "background.default",
+  backgroundImage: "linear-gradient(45deg, rgba(127,127,127,.14) 25%, transparent 25%), linear-gradient(-45deg, rgba(127,127,127,.14) 25%, transparent 25%), linear-gradient(45deg, transparent 75%, rgba(127,127,127,.14) 75%), linear-gradient(-45deg, transparent 75%, rgba(127,127,127,.14) 75%)",
+  backgroundSize: "20px 20px",
+  backgroundPosition: "0 0, 0 10px, 10px -10px, -10px 0",
+} as const;
 
 export function ImageViewer({ fileID, name, mediaType, viewport }: ImageViewerProps) {
-  const [natural, setNatural] = useState<ImageSize>();
+  const [loaded, setLoaded] = useState<LoadedImage>();
+  const [imageElement, setImageElement] = useState<HTMLImageElement | null>(null);
   const [viewportSize, setViewportSize] = useState<ImageSize>({ width: 0, height: 0 });
   const [fit, setFit] = useState(true);
   const [manualScale, setManualScale] = useState(1);
-  const [failed, setFailed] = useState(false);
+  const [failedSource, setFailedSource] = useState("");
   const source = useMemo(() => imageAssetURL(fileID, window.location), [fileID]);
+  const natural = loaded?.source === source ? loaded : undefined;
+  const failed = failedSource === source;
 
   useEffect(() => {
     const element = viewport.current;
@@ -33,7 +44,34 @@ export function ImageViewer({ fileID, name, mediaType, viewport }: ImageViewerPr
     return () => window.removeEventListener("resize", update);
   }, [viewport]);
 
-  useEffect(() => { setNatural(undefined); setFailed(false); }, [source]);
+  useEffect(() => {
+    if (!imageElement) return;
+    let active = true;
+    const ready = () => {
+      if (!active) return;
+      if (imageElement.naturalWidth > 0 && imageElement.naturalHeight > 0) {
+        setLoaded({ source, width: imageElement.naturalWidth, height: imageElement.naturalHeight });
+        setFailedSource(value => value === source ? "" : value);
+      }
+    };
+    const fail = () => { if (active) setFailedSource(source); };
+    imageElement.addEventListener("load", ready);
+    imageElement.addEventListener("error", fail);
+    // A cached/custom-protocol resource may finish before React attaches its
+    // synthetic onLoad handler. Read the completed element synchronously and
+    // also ask the decoder, so dimensions cannot be lost between effects.
+    if (imageElement.complete) {
+      if (imageElement.naturalWidth > 0) ready();
+      else void imageElement.decode().then(ready, fail);
+    } else {
+      void imageElement.decode().then(ready, () => { /* native error event supplies the final state */ });
+    }
+    return () => {
+      active = false;
+      imageElement.removeEventListener("load", ready);
+      imageElement.removeEventListener("error", fail);
+    };
+  }, [imageElement, source]);
 
   if (!mediaType) {
     return <Alert severity="error">Формат изображения не поддерживается. Для диагностики выберите режим HEX или Текст.</Alert>;
@@ -51,7 +89,8 @@ export function ImageViewer({ fileID, name, mediaType, viewport }: ImageViewerPr
     setFit(false);
   };
 
-  return <Box aria-label="Просмотр изображения" sx={{ minWidth: "100%", width: "max-content" }}>
+  return <Box aria-label="Просмотр изображения" data-image-canvas sx={{ minWidth: "100%", width: `${canvasWidth}px`,
+    minHeight: `${canvasHeight}px`, ...checkerboard }}>
     <Box sx={{ position: "sticky", left: 0, top: 0, zIndex: 2, display: "flex", alignItems: "center", gap: .5,
       width: "fit-content", maxWidth: "calc(100vw - 48px)", p: .5, mb: 1, bgcolor: "background.paper",
       border: 1, borderColor: "divider", borderRadius: 1 }}>
@@ -69,22 +108,20 @@ export function ImageViewer({ fileID, name, mediaType, viewport }: ImageViewerPr
       Не удалось декодировать изображение. Файл повреждён либо формат не поддерживается текущим WebView.
     </Alert>}
     {!natural && !failed && <CircularProgress aria-label="Декодирование изображения" sx={{ position: "sticky", left: 24 }} />}
-    <Box sx={{ width: canvasWidth, height: canvasHeight, display: "flex", alignItems: "center", justifyContent: "center",
-      backgroundColor: "background.default",
-      backgroundImage: "linear-gradient(45deg, rgba(127,127,127,.14) 25%, transparent 25%), linear-gradient(-45deg, rgba(127,127,127,.14) 25%, transparent 25%), linear-gradient(45deg, transparent 75%, rgba(127,127,127,.14) 75%), linear-gradient(-45deg, transparent 75%, rgba(127,127,127,.14) 75%)",
-      backgroundSize: "20px 20px", backgroundPosition: "0 0, 0 10px, 10px -10px, -10px 0" }}>
-      <Box component="img" src={source} alt={name} draggable={false} onLoad={event => {
-        const image = event.currentTarget;
-        if (image.naturalWidth > 0 && image.naturalHeight > 0) {
-          setNatural({ width: image.naturalWidth, height: image.naturalHeight });
-          setFailed(false);
-        } else setFailed(true);
-      }} onError={() => { setNatural(undefined); setFailed(true); }} sx={{ display: failed ? "none" : "block",
-        // MUI interprets numeric dimensions in the 0..1 range as fractions;
-        // explicit CSS pixels keep 100% at one image pixel per CSS pixel.
-        width: natural ? `${displayWidth}px` : "auto", height: natural ? `${displayHeight}px` : "auto",
-        maxWidth: "none", maxHeight: "none",
-        imageRendering: scale >= 2 ? "auto" : undefined }} />
+    <Box sx={{ width: `${canvasWidth}px`, height: `${canvasHeight}px`, display: "flex", alignItems: "center",
+      justifyContent: "center" }}>
+      <img ref={setImageElement} src={source} alt={name} draggable={false}
+        onLoad={event => {
+          const image = event.currentTarget;
+          if (image.naturalWidth > 0 && image.naturalHeight > 0) {
+            setLoaded({ source, width: image.naturalWidth, height: image.naturalHeight });
+            setFailedSource(value => value === source ? "" : value);
+          }
+        }}
+        onError={() => setFailedSource(source)}
+        style={{ display: failed ? "none" : "block",
+          width: natural ? `${displayWidth}px` : "auto", height: natural ? `${displayHeight}px` : "auto",
+          maxWidth: "none", maxHeight: "none", imageRendering: scale >= 2 ? "auto" : undefined }} />
     </Box>
   </Box>;
 }

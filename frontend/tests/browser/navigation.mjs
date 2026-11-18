@@ -19,7 +19,7 @@ try {
   const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
   const routeImages = target => target.route("**/viewer-image/**", route => route.fulfill({ status: 200, contentType: "image/png",
     body: route.request().url().includes("viewer-broken") ? Buffer.from("broken image")
-      : Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64") }));
+      : Buffer.from("iVBORw0KGgoAAAANSUhEUgAAACAAAAfQAQAAAACLNGDOAAAAIGNIUk0AAHomAACAhAAA+gAAAIDoAAB1MAAA6mAAADqYAAAXcJy6UTwAAAACdFJOUwAAdpPNOAAAAAJiS0dEAAHdihOkAAAAB3RJTUUH6gsSFTso5SEaGAAAACV0RVh0ZGF0ZTpjcmVhdGUAMjAyNi0xMS0xOFQyMTo1OTo0MCswMDowMA2tRzoAAAAldEVYdGRhdGU6bW9kaWZ5ADIwMjYtMTEtMThUMjE6NTk6NDArMDA6MDB88P+GAAAAKHRFWHRkYXRlOnRpbWVzdGFtcAAyMDI2LTExLTE4VDIxOjU5OjQwKzAwOjAwK+XeWQAAACFJREFUaN7twQENAAAAwqD3T20ON6AAAAAAAAAAAADg3wAnEAABgLON2gAAAABJRU5ErkJggg==", "base64") }));
   await routeImages(page);
   const errors = [];
   page.on("pageerror", error => errors.push(error.message));
@@ -209,20 +209,34 @@ try {
   await hexPageB.close();
   await hexPage.close();
 
-  // Image mode uses the existing viewer session and native asset URL. Fit and
-  // 100% preserve natural dimensions; zoom controls remain available.
+  // Image mode uses the existing viewer session and native asset URL. The tall
+  // transparent fixture exercises actual zoom dimensions and the checkerboard
+  // after scrolling below the initially visible area.
   const imagePage = await browser.newPage({ viewport: { width: 960, height: 720 } });
   await routeImages(imagePage);
   await imagePage.goto(`${appURL}?viewer=viewer-image&viewerMode=image`);
   const imageViewer = imagePage.getByRole("region", { name: "Просмотр файла" });
   const image = imageViewer.getByRole("img", { name: "picture without extension" });
   await image.waitFor();
+  await imagePage.waitForFunction(() => !document.querySelector('[aria-label="Декодирование изображения"]'));
   await imageViewer.getByRole("button", { name: "100%" }).click();
   assert.deepEqual(await image.evaluate(element => ({ naturalWidth: element.naturalWidth, naturalHeight: element.naturalHeight,
     width: element.getBoundingClientRect().width, height: element.getBoundingClientRect().height })),
-  { naturalWidth: 1, naturalHeight: 1, width: 1, height: 1 });
+  { naturalWidth: 32, naturalHeight: 2000, width: 32, height: 2000 });
+  const imageScroller = imageViewer.locator('[data-image-canvas]').locator("xpath=..");
+  const imageCanvas = imageViewer.locator('[data-image-canvas]');
+  assert.match(await imageCanvas.evaluate(element => getComputedStyle(element).backgroundImage), /linear-gradient/,
+    "transparent-image checkerboard belongs to the entire scrollable canvas");
+  await imageScroller.evaluate(element => { element.scrollTop = element.scrollHeight; });
+  const [canvasAtBottom, scrollerAtBottom] = await Promise.all([imageCanvas.boundingBox(), imageScroller.boundingBox()]);
+  assert.ok(canvasAtBottom && scrollerAtBottom &&
+    canvasAtBottom.y + canvasAtBottom.height >= scrollerAtBottom.y + scrollerAtBottom.height - 32,
+    "checkerboard canvas still covers the viewport after scrolling to the bottom");
   await imageViewer.getByRole("button", { name: "Увеличить изображение" }).click();
   assert.equal(await imageViewer.getByText("125%").count(), 1);
+  assert.deepEqual(await image.evaluate(element => ({ width: element.getBoundingClientRect().width,
+    height: element.getBoundingClientRect().height })), { width: 40, height: 2500 },
+  "zoom changes the rendered image dimensions, not only the label");
   const imagePageB = await browser.newPage({ viewport: { width: 960, height: 720 } });
   await routeImages(imagePageB);
   await imagePageB.goto(`${appURL}?viewer=viewer-image-b&viewerMode=image`);
@@ -231,6 +245,10 @@ try {
   assert.equal(await imageViewer.getByText("125%").count(), 1);
   assert.match(await imageViewerB.getByRole("button", { name: "Вписать" }).getAttribute("class"), /MuiButton-contained/,
     "image B must retain Fit while A is zoomed");
+  await imageViewer.getByRole("button", { name: "Вписать" }).click();
+  const fitted = await image.evaluate(element => ({ width: element.getBoundingClientRect().width,
+    height: element.getBoundingClientRect().height }));
+  assert.ok(fitted.height < 2000 && fitted.width < 32, "Fit shrinks the image into the available viewport");
   await imagePageB.close();
   await imagePage.close();
   const brokenPage = await browser.newPage({ viewport: { width: 960, height: 720 } });
