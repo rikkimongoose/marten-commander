@@ -71,8 +71,14 @@ func main() {
 	}); err != nil {
 		log.Fatal(err)
 	}
-	desktopApp.Window.NewWithOptions(application.WebviewWindowOptions{
+	mainWindow := desktopApp.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title: "Marten Commander", Width: 1200, Height: 720, URL: "/",
+	})
+	mainWindow.RegisterHook(events.Common.WindowClosing, func(*application.WindowEvent) {
+		// Closing the commander window means quitting the application, even
+		// while independent Viewer windows are still open. Quit performs the
+		// service shutdown first, which releases every viewer session.
+		go desktopApp.Quit()
 	})
 	if err := desktopApp.Run(); err != nil {
 		log.Fatal(err)
