@@ -4,12 +4,15 @@ import (
 	"embed"
 	"log"
 	"os"
+	"path/filepath"
 
+	"github.com/adrg/xdg"
 	"github.com/rikkimongoose/marten-commander/internal/app"
 	"github.com/rikkimongoose/marten-commander/internal/desktop"
 	"github.com/rikkimongoose/marten-commander/internal/localfs"
 	"github.com/rikkimongoose/marten-commander/internal/operations"
 	"github.com/rikkimongoose/marten-commander/internal/settings"
+	remotesftp "github.com/rikkimongoose/marten-commander/internal/sftp"
 	"github.com/rikkimongoose/marten-commander/internal/viewer"
 	"github.com/rikkimongoose/marten-commander/internal/volumes"
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -44,6 +47,10 @@ func main() {
 	moveService := app.NewMoveService(filesystem, operationManager)
 	operationService := desktop.NewOperationService(operationManager)
 	trashService := app.NewTrashService(localfs.SystemTrash{}, operationManager)
+	profileStore := remotesftp.NewProfileStore(filepath.Join(xdg.ConfigHome, "marten-commander"))
+	knownHostsPath := filepath.Join(xdg.Home, ".ssh", "known_hosts")
+	sftpManager := remotesftp.NewManager(profileStore, knownHostsPath)
+	sftpService := desktop.NewSFTPService(profileStore, sftpManager)
 	viewerService := desktop.NewViewerService(viewer.LocalFileSource{})
 	var desktopApp *application.App
 	viewerWindows := desktop.NewViewerWindowService(viewerService, func(options desktop.ViewerWindowOptions) (desktop.ViewerWindow, error) {
@@ -62,6 +69,7 @@ func main() {
 			application.NewService(viewerWindows),
 			application.NewService(desktop.NewVolumeService(volumes.NewService())),
 			application.NewService(operationService),
+			application.NewService(sftpService),
 		},
 		Assets: application.AssetOptions{Handler: application.AssetFileServerFS(assets), Middleware: desktop.NewViewerImageMiddleware(viewerService)},
 		Mac:    application.MacOptions{ApplicationShouldTerminateAfterLastWindowClosed: true},

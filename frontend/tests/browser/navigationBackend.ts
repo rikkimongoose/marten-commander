@@ -11,7 +11,8 @@ const state = { trashed: new Set<string>(), previews: [] as any[], reads: [] as 
   mkdirs: [] as { parent: string; name: string }[], created: new Map<string, string[]>(), holdMkdir: false,
   releaseMkdir: undefined as (() => void) | undefined, operations: [] as any[], conflictResolutions: [] as any[],
   viewerReads: [] as string[], viewerBinaryReads: [] as { offset: string; length: number }[], viewerMode: query.get("viewerMode") ?? "text",
-  viewerBroken: query.has("viewerBroken"), viewerClosed: 0, viewerWindows: [] as string[] };
+  viewerBroken: query.has("viewerBroken"), viewerClosed: 0, viewerWindows: [] as string[],
+  sftpProfiles: [] as any[], sftpAttempts: new Map<string, any>(), sftpSecrets: [] as string[], sftpCancels: 0 };
 Object.assign(window, { navigationTest: state });
 
 function resolve(path: string, base: string) {
@@ -48,6 +49,34 @@ export async function GetVolumeInfo() {
     space: { total: "1000", free: "400", available: "400", used: "600" } };
 }
 export async function ListVolumes() { return [await GetVolumeInfo()]; }
+export async function ListProfiles() { return state.sftpProfiles.map(profile => ({ ...profile })); }
+export async function SaveProfile(profile: any) {
+  const saved = { ...profile, id: profile.id || `profile-${state.sftpProfiles.length + 1}` };
+  const index = state.sftpProfiles.findIndex(item => item.id === saved.id);
+  if (index < 0) state.sftpProfiles.push(saved); else state.sftpProfiles[index] = saved;
+  return { ...saved };
+}
+export async function DeleteProfile(id: string) { state.sftpProfiles = state.sftpProfiles.filter(profile => profile.id !== id); }
+export async function Connect(request: any) {
+  state.sftpSecrets.push(request.secret);
+  const status = { attemptId: `attempt-${state.sftpAttempts.size + 1}`, profileId: request.profileId, state: "connecting" };
+  state.sftpAttempts.set(status.attemptId, status);
+  return { ...status };
+}
+export async function GetConnectionStatus(id: string) {
+  const status = state.sftpAttempts.get(id);
+  if (status.state === "connecting") Object.assign(status, { state: "awaiting_host_key", challenge: { id: "challenge-1",
+    host: "sftp.example", port: 2222, algorithm: "ssh-ed25519", fingerprint: "SHA256:test-fingerprint", expiresAt: "2099-01-01T00:00:00Z" } });
+  return structuredClone(status);
+}
+export async function ResolveHostKey(attemptID: string, challengeID: string, accept: boolean) {
+  const status = state.sftpAttempts.get(attemptID);
+  if (challengeID !== status.challenge.id) throw new Error("stale challenge");
+  Object.assign(status, accept ? { state: "connected", connectionId: "connection-1", challenge: undefined }
+    : { state: "error", error: "Ключ отклонён", challenge: undefined });
+}
+export async function CancelConnection(id: string) { state.sftpCancels++; Object.assign(state.sftpAttempts.get(id), { state: "cancelled" }); }
+export async function Disconnect(_id: string) {}
 export async function ListOperations() { return state.operations; }
 export async function CancelOperation() { throw new Error("Test operation not found"); }
 export async function ResolveConflict(resolution: any) {

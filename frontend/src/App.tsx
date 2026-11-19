@@ -21,6 +21,7 @@ import { CopyDialog } from "./CopyDialog";
 import type { Operation } from "../bindings/github.com/rikkimongoose/marten-commander/internal/operations/models";
 import { moveFocusCandidates, operationRefreshLocations } from "./operationRefresh";
 import { OpenViewer } from "../bindings/github.com/rikkimongoose/marten-commander/internal/desktop/viewerwindowservice";
+import { SFTPConnections } from "./SFTPConnections";
 
 type MkdirDialogState = { open: boolean; destination: string; busy: boolean; error: string };
 type CopyDialogState = { open: boolean; sources: string[]; destination: string; busy: boolean; error: string };
@@ -220,6 +221,7 @@ export default function App() {
     <AgGridProvider modules={[AllCommunityModule]}>
       <CssBaseline />
       <Box sx={{ height: "100vh", display: "flex", flexDirection: "column", p: 1, gap: 1, position: "relative" }}>
+        <Box component="nav" aria-label="Главное меню" sx={{ minHeight: 32 }}><SFTPConnections /></Box>
         {commandError && <Alert severity="error" onClose={() => setCommandError("")}>{commandError}</Alert>}
         <Box sx={{ display: "flex", flex: 1, minHeight: 0, gap: 1 }}>
           <FilePanel ref={left} label="Левая панель" active={active === "left"} activate={() => activate("left")}

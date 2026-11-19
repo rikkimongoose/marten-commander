@@ -8,7 +8,7 @@ import react from "@vitejs/plugin-react";
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || "playwright-core");
 const server = await createServer({
   configFile: false, root: fileURLToPath(new URL("../../", import.meta.url)), plugins: [react()],
-  resolve: { alias: [{ find: /.*bindings\/.*\/desktop\/(commandservice|directoryservice|operationservice|volumeservice|viewerservice|viewerwindowservice)(\.[jt]s)?$/,
+  resolve: { alias: [{ find: /.*bindings\/.*\/desktop\/(commandservice|directoryservice|operationservice|sftpservice|volumeservice|viewerservice|viewerwindowservice)(\.[jt]s)?$/,
     replacement: fileURLToPath(new URL("navigationBackend.ts", import.meta.url)) }] },
   server: { host: "127.0.0.1", port: 0 },
 });
@@ -68,6 +68,47 @@ try {
     "disabled shortcut does not dispatch a command");
   assert.equal(await page.getByRole("alert").count(), 0, "disabled shortcut reports no fake result or error");
   await path("left", home); await path("right", home);
+
+  // SFTP profiles are managed without changing either local panel. Secrets
+  // exist only in the dedicated Connect call; first-use host keys require an
+  // explicit fingerprint decision.
+  await page.getByRole("button", { name: "Сеть" }).click();
+  await page.getByRole("menuitem", { name: /SFTP-подключения/ }).click();
+  const sftpDialog = page.getByRole("dialog", { name: "SFTP-подключения" });
+  await sftpDialog.getByRole("button", { name: "Создать" }).click();
+  await sftpDialog.getByRole("button", { name: "Сохранить профиль" }).click();
+  await sftpDialog.getByText("Укажите название профиля.").waitFor();
+  await sftpDialog.getByRole("textbox", { name: "Название" }).fill("Тестовый SFTP");
+  await sftpDialog.getByRole("textbox", { name: "Hostname или IP" }).fill("sftp.example");
+  await sftpDialog.getByRole("spinbutton", { name: "Порт" }).fill("2222");
+  await sftpDialog.getByRole("textbox", { name: "Пользователь" }).fill("tester");
+  await sftpDialog.getByRole("combobox", { name: "Аутентификация" }).click();
+  await page.getByRole("option", { name: "Приватный ключ" }).click();
+  await sftpDialog.getByRole("textbox", { name: "Путь к приватному ключу" }).waitFor();
+  await sftpDialog.getByRole("combobox", { name: "Аутентификация" }).click();
+  await page.getByRole("option", { name: "Пароль" }).click();
+  assert.equal(await sftpDialog.getByRole("textbox", { name: "Путь к приватному ключу" }).count(), 0);
+  await sftpDialog.getByRole("textbox", { name: "Начальный каталог (POSIX)" }).fill("/srv/data");
+  await sftpDialog.getByRole("button", { name: "Сохранить профиль" }).click();
+  await sftpDialog.getByText("tester@sftp.example:2222").first().waitFor();
+  const password = sftpDialog.getByLabel("Пароль");
+  await password.fill("browser-only-secret");
+  await sftpDialog.getByRole("button", { name: "Подключиться" }).click();
+  const hostKeyDialog = page.getByRole("dialog", { name: "Новый ключ SSH-сервера" });
+  await hostKeyDialog.getByText("test-fingerprint").waitFor();
+  await hostKeyDialog.getByRole("button", { name: "Доверять и подключиться" }).click();
+  await sftpDialog.getByText("Состояние: Подключено").waitFor();
+  assert.deepEqual(await page.evaluate(() => window.navigationTest.sftpSecrets), ["browser-only-secret"]);
+  assert.equal(await page.evaluate(() => Object.keys(window.navigationTest.sftpProfiles[0])
+    .some(key => /password|passphrase|secret|token/i.test(key))), false, "profile stores no secret-shaped field");
+  await sftpDialog.getByRole("button", { name: "Отключиться" }).click();
+  await sftpDialog.getByText("Состояние: Отключено").waitFor();
+  await sftpDialog.getByLabel("Пароль").fill("cancel-secret");
+  await sftpDialog.getByRole("button", { name: "Подключиться" }).click();
+  await sftpDialog.getByRole("button", { name: "Закрыть" }).click();
+  await page.waitForFunction(() => window.navigationTest.sftpCancels === 1);
+  assert.equal(await panel("left").getAttribute("data-active"), "true", "SFTP dialog never replaces local panels");
+
   const operationsButton = page.getByRole("button", { name: "Операции" });
   await operationsButton.click();
   const operationsDialog = page.getByRole("dialog", { name: "Файловые операции" });
