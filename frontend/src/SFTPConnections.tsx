@@ -173,7 +173,13 @@ export function SFTPConnections() {
             </List>
           </Box>
           <Box>
-            {editing ? <ProfileForm value={form} disabled={saving} change={setForm} /> : selected ? <>
+            {editing ? <>
+              <ProfileForm value={form} disabled={saving} change={setForm} />
+              <Stack direction="row" spacing={1} sx={{ mt: 2, justifyContent: "flex-end" }}>
+                <Button disabled={saving} onClick={() => setEditing(false)}>Отмена редактирования</Button>
+                <Button disabled={saving} variant="contained" onClick={() => void save()}>Сохранить профиль</Button>
+              </Stack>
+            </> : selected ? <>
               <Typography variant="h6">{selected.name}</Typography>
               <Typography>{selected.username}@{selected.host}:{selected.port}</Typography>
               <Typography color="text.secondary">Аутентификация: {authLabel(selected.authMethod)}</Typography>
@@ -195,8 +201,6 @@ export function SFTPConnections() {
         </Box>
       </DialogContent>
       <DialogActions>
-        {editing && <><Button disabled={saving} onClick={() => setEditing(false)}>Отмена редактирования</Button>
-          <Button disabled={saving} variant="contained" onClick={() => void save()}>Сохранить профиль</Button></>}
         <Button onClick={close}>Закрыть</Button>
       </DialogActions>
     </Dialog>
