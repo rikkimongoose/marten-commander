@@ -26,6 +26,7 @@ export type {
     Entry,
     HomeDirectory,
     PanelContext,
+    RemoteDirectoryRequest,
     TrashEntry,
     TrashPreview,
     ViewerChunk,

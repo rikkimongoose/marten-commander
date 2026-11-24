@@ -73,8 +73,11 @@ export function registerFileCommands(
   showViewer?: (file: ViewerFile) => void,
 ) {
   dispatcher.register("file.open", {
-    available: context => sourceAndTarget(context).source.directoryLocation === null
-      ? { enabled: false, reason: "Каталог ещё не открыт." } : { enabled: true },
+    available: context => {
+      const source = sourceAndTarget(context).source;
+      if (source.source === "remote") return { enabled: false, reason: "Скачивание и открытие SFTP-файлов появится в #26." };
+      return source.directoryLocation === null ? { enabled: false, reason: "Каталог ещё не открыт." } : { enabled: true };
+    },
     execute: request => {
       if (typeof request.params.location !== "string" || !request.params.location) {
         throw new CommandError("invalid_params", "Не указан файл для открытия.");
@@ -85,6 +88,7 @@ export function registerFileCommands(
   dispatcher.register("file.edit", {
     available: context => {
       const source = sourceAndTarget(context).source;
+      if (source.source === "remote") return { enabled: false, reason: "Редактирование SFTP-файлов пока недоступно." };
       return source.focusedLocation !== null && source.focusedKind === "file"
         ? { enabled: true } : { enabled: false, reason: "Под курсором нет обычного файла." };
     },
@@ -100,6 +104,7 @@ export function registerFileCommands(
   dispatcher.register("file.view", {
     available: context => {
       const source = sourceAndTarget(context).source;
+      if (source.source === "remote") return { enabled: false, reason: "Просмотр SFTP-файлов появится в #26." };
       return source.focusedViewLocation
         ? { enabled: true } : { enabled: false, reason: "Установите курсор на файл." };
     },
@@ -112,8 +117,11 @@ export function registerFileCommands(
     },
   });
   if (mkdir) dispatcher.register("file.mkdir", {
-    available: context => sourceAndTarget(context).source.directoryLocation === null
-      ? { enabled: false, reason: "Каталог ещё не открыт." } : { enabled: true },
+    available: context => {
+      const source = sourceAndTarget(context).source;
+      if (source.source === "remote") return { enabled: false, reason: "Создание SFTP-каталогов пока недоступно." };
+      return source.directoryLocation === null ? { enabled: false, reason: "Каталог ещё не открыт." } : { enabled: true };
+    },
     prepare: async context => mkdirParams(await mkdir.prompt.open(context)),
     execute: async initial => {
       let request = initial;
@@ -139,6 +147,7 @@ export function registerFileCommands(
       const { source, target } = sourceAndTarget(context);
       if (source.directoryLocation === null) return { enabled: false, reason: "Исходный каталог ещё не открыт." };
       if (target.directoryLocation === null) return { enabled: false, reason: "Каталог назначения ещё не открыт." };
+      if (source.source === "remote" || target.source === "remote") return { enabled: false, reason: "Копирование с SFTP появится в #26." };
       if (effectiveSelection(source).length === 0) return { enabled: false, reason: "Не выбран файл или каталог для копирования." };
       return { enabled: true };
     },
@@ -166,6 +175,7 @@ export function registerFileCommands(
       const { source, target } = sourceAndTarget(context);
       if (source.directoryLocation === null) return { enabled: false, reason: "Исходный каталог ещё не открыт." };
       if (target.directoryLocation === null) return { enabled: false, reason: "Каталог назначения ещё не открыт." };
+      if (source.source === "remote" || target.source === "remote") return { enabled: false, reason: "Перемещение с SFTP пока недоступно." };
       if (effectiveSelection(source).length === 0) return { enabled: false, reason: "Не выбран файл или каталог для перемещения." };
       return { enabled: true };
     },

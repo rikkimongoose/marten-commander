@@ -91,6 +91,37 @@ func TestCommandEffectiveSelection(t *testing.T) {
 	}
 }
 
+func TestRemotePanelsCannotReachLocalCommandHandlers(t *testing.T) {
+	for _, command := range []string{"terminal.run", "file.open", "file.view", "file.edit", "file.mkdir", "file.trash"} {
+		request := commandFixture(t)
+		request.Type = command
+		request.Context.Left.Source = "remote"
+		request.Context.Left.ConnectionID = "connection-1"
+		err := NewCommandService(&fileServiceStub{}).ExecuteCommand(context.Background(), request)
+		var commandError *CommandError
+		if !errors.As(err, &commandError) || commandError.Code != "unavailable" {
+			t.Errorf("%s error = %v", command, err)
+		}
+	}
+	for _, active := range []string{"left", "right"} {
+		for _, command := range []string{"file.copy", "file.move"} {
+			request := commandFixture(t)
+			request.Type = command
+			request.Context.ActivePanel = active
+			remote := &request.Context.Right
+			if active == "right" {
+				remote = &request.Context.Left
+			}
+			remote.Source, remote.ConnectionID = "remote", "connection-1"
+			err := NewCommandService(&fileServiceStub{}).ExecuteCommand(context.Background(), request)
+			var commandError *CommandError
+			if !errors.As(err, &commandError) || commandError.Code != "unavailable" {
+				t.Errorf("%s active=%s error = %v", command, active, err)
+			}
+		}
+	}
+}
+
 func TestFileOpenCommandPassesExactDecodedLocation(t *testing.T) {
 	request := commandFixture(t)
 	path := filepath.Join(t.TempDir(), "отчёт с пробелами.txt")

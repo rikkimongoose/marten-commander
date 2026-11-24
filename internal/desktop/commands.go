@@ -17,6 +17,8 @@ import (
 // PanelContext uses the same reversible native-path encoding as Directory and
 // Entry. A nil directory means the panel has not loaded a directory yet.
 type PanelContext struct {
+	Source            string   `json:"source"`
+	ConnectionID      string   `json:"connectionId,omitempty"`
 	DirectoryLocation *string  `json:"directoryLocation"`
 	SelectedLocations []string `json:"selectedLocations"`
 	FocusedLocation   *string  `json:"focusedLocation"`
@@ -35,6 +37,8 @@ func (p PanelContext) effectiveSelection() []string {
 	}
 	return []string{}
 }
+
+func (p PanelContext) local() bool { return p.Source == "" || p.Source == "local" }
 
 type CommandContext struct {
 	ActivePanel string       `json:"activePanel"`
@@ -135,16 +139,19 @@ func (s *CommandService) ExecuteCommand(ctx context.Context, request CommandRequ
 	if strings.TrimSpace(request.ID) == "" || strings.TrimSpace(request.Type) == "" {
 		return &CommandError{"invalid_request", "Не указаны идентификатор вызова или тип команды."}
 	}
-	if request.Type == "terminal.run" {
-		source, _ := request.Context.sourceAndTarget()
-		if source.DirectoryLocation != nil {
-			if _, ok := decodeLocation(*source.DirectoryLocation); !ok {
-				return &CommandError{"invalid_context", "Терминал доступен только для локальной панели; SFTP не поддерживается."}
-			}
-		}
-	}
 	if err := validateCommandContext(request.Context); err != nil {
 		return err
+	}
+	source, target := request.Context.sourceAndTarget()
+	switch request.Type {
+	case "terminal.run", "file.open", "file.view", "file.edit", "file.mkdir", "file.trash":
+		if !source.local() {
+			return &CommandError{"unavailable", "Команда пока доступна только для локальной панели."}
+		}
+	case "file.copy", "file.move":
+		if !source.local() || !target.local() {
+			return &CommandError{"unavailable", "Копирование и перемещение между локальной и SFTP-панелью появится в следующей задаче."}
+		}
 	}
 	// The envelope requires a JSON object. Each future supported type must decode
 	// its own parameter struct (rejecting unknown fields) and validate it before
@@ -417,6 +424,12 @@ func validateCommandContext(c CommandContext) error {
 		return invalid()
 	}
 	for _, panel := range []PanelContext{c.Left, c.Right} {
+		if panel.Source != "" && panel.Source != "local" && panel.Source != "remote" {
+			return invalid()
+		}
+		if panel.local() && panel.ConnectionID != "" || panel.Source == "remote" && panel.ConnectionID == "" {
+			return invalid()
+		}
 		if panel.SelectedLocations == nil {
 			return invalid()
 		}

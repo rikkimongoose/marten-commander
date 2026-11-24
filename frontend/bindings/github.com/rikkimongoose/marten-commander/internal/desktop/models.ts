@@ -19,6 +19,8 @@ export interface CommandRequest {
 }
 
 export interface Directory {
+    "source": string;
+    "connectionId"?: string;
     "location": string;
     "parentLocation": string;
 
@@ -77,10 +79,19 @@ export interface HomeDirectory {
  * Entry. A nil directory means the panel has not loaded a directory yet.
  */
 export interface PanelContext {
+    "source": string;
+    "connectionId"?: string;
     "directoryLocation": string | null;
     "selectedLocations": string[] | null;
     "focusedLocation": string | null;
     "focusedKind"?: string | null;
+}
+
+export interface RemoteDirectoryRequest {
+    "connectionId": string;
+    "path": string;
+    "location": string;
+    "baseLocation": string;
 }
 
 export interface TrashEntry {

@@ -4,13 +4,15 @@ import { alpha } from "@mui/material/styles";
 import { AgGridReact } from "ag-grid-react";
 import type { ColDef, GridApi } from "ag-grid-community";
 import { ReadDirectory } from "../bindings/github.com/rikkimongoose/marten-commander/internal/desktop/directoryservice";
+import { ReadRemoteDirectory } from "../bindings/github.com/rikkimongoose/marten-commander/internal/desktop/sftpservice";
 import type { Directory, HomeDirectory } from "../bindings/github.com/rikkimongoose/marten-commander/internal/desktop/models";
 import { DirectoryLoader } from "./directoryLoader";
 import { compareEntries, restoredIndex, visibleEntries, type SortField } from "./fileSorting";
 import { CommandError, type CommandId, type JsonObject, type PanelContext } from "./commands";
 import { VolumeBar } from "./VolumeBar";
 import { GetVolumeInfo } from "../bindings/github.com/rikkimongoose/marten-commander/internal/desktop/volumeservice";
-import { createPanelReader, selectedHomeAfterNavigation, type PanelNavigationRequest } from "./panelNavigation";
+import { createPanelDirectoryReader, panelNavigationRequest, restoreLocalRequest, selectedHomeAfterNavigation,
+  type PanelNavigationRequest, type PanelNavigationTarget } from "./panelNavigation";
 import { entryDestination, fileLocation, fileSelection, hasParent, panelRows, returnCursor, type PanelRow } from "./panelRows";
 import { isTextInput, panelKeyCommand } from "./panelKeyboard";
 
@@ -32,6 +34,7 @@ const columns: ColDef<PanelRow>[] = [
 const defaultColumn: ColDef<PanelRow> = { sortable: true, resizable: true, cellDataType: false, sortingOrder: ["asc", "desc"] };
 const rowHeight = 28;
 type View = { current?: string; index: number; top?: string; topIndex: number; focus: boolean; preferred?: string };
+type LocalPanelState = { directory: Directory; view: View; home?: HomeDirectory };
 
 function focusedKind(row?: PanelRow): PanelContext["focusedKind"] {
   if (!fileLocation(row)) return null;
@@ -53,6 +56,8 @@ export interface FilePanelHandle {
   refreshCreated(directoryLocation: string, name: string): void;
   refreshDirectory(directoryLocation: string): void;
   describeLocations(locations: readonly string[]): string[];
+  openRemote(connectionId: string): void;
+  disconnectRemote(connectionId: string): void;
 }
 
 type FilePanelProps = { label: string; active: boolean; activate: () => void; onContextChange: () => void;
@@ -81,6 +86,8 @@ export const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(function Fi
   const created = useRef<{ directoryLocation: string; name: string }>();
   const gridRendered = useRef(false);
   const loader = useRef<DirectoryLoader<PanelNavigationRequest>>();
+  const requestedConnection = useRef<string>();
+  const localBeforeRemote = useRef<LocalPanelState>();
   const activeRef = useRef(active);
   activeRef.current = active;
   const showHiddenRef = useRef(showHidden);
@@ -95,7 +102,7 @@ export const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(function Fi
   useEffect(() => { onContextChange(); }, [directory, focusedRow, onContextChange]);
 
   useImperativeHandle(ref, () => ({
-    navigate: (location, volumeId, home) => navigate({ path: "", location, volumeId, home }),
+    navigate: (location, volumeId, home) => navigate({ path: "", location, volumeId, home, source: "local" }),
     navigatePath: (path, baseLocation) => navigate({ path, location: "", baseLocation }),
     getDisplayPath: () => snapshot.current?.displayPath ?? "",
     openEntry: (directory, rowId) => {
@@ -118,7 +125,35 @@ export const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(function Fi
       if (snapshot.current?.location === directoryLocation) navigate({ path: "", location: directoryLocation });
     },
     describeLocations: locations => locations.map(location => api.current?.getRowNode(location)?.data?.name ?? location),
+    openRemote: connectionId => {
+      if (snapshot.current?.source === "local") {
+        localBeforeRemote.current = { directory: snapshot.current, view: capture(), home: selectedHome };
+      }
+      requestedConnection.current = connectionId;
+      navigate({ path: "", location: "", source: "remote", connectionId });
+    },
+    disconnectRemote: connectionId => {
+      if (requestedConnection.current !== connectionId && snapshot.current?.connectionId !== connectionId) return;
+      requestedConnection.current = undefined;
+      loader.current?.invalidate();
+      const saved = localBeforeRemote.current;
+      if (saved) {
+        restore.current = saved.view;
+        snapshot.current = saved.directory;
+        setDirectory(saved.directory);
+        setSelectedHome(saved.home);
+        setError("");
+      } else {
+        snapshot.current = undefined;
+        setDirectory(undefined);
+        setSelectedHome(undefined);
+      }
+      loader.current?.request(restoreLocalRequest(saved?.directory));
+    },
     getContext: () => ({
+      source: snapshot.current?.source === "remote" ? "remote" : "local",
+      ...(snapshot.current?.source === "remote" && snapshot.current.connectionId
+        ? { connectionId: snapshot.current.connectionId } : {}),
       directoryLocation: snapshot.current?.location ?? null,
       selectedLocations: api.current?.getSelectedNodes().flatMap(node => fileLocation(node.data) ? [node.data!.id] : []) ?? [],
       focusedLocation: current.current ? fileLocation(api.current?.getRowNode(current.current)?.data) : null,
@@ -180,11 +215,14 @@ export const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(function Fi
   }
 
   useEffect(() => {
-    const reader = new DirectoryLoader(createPanelReader(ReadDirectory, GetVolumeInfo), {
+    const reader = new DirectoryLoader<PanelNavigationRequest>(createPanelDirectoryReader(
+      ReadDirectory, GetVolumeInfo, ReadRemoteDirectory), {
       start: () => { setLoading(true); setError(""); },
       success: (next, request) => {
-        const sameDirectory = snapshot.current?.location === next.location;
-        const returned = returnCursor(snapshot.current, next);
+        const sameProvider = snapshot.current?.source === next.source &&
+          (next.source !== "remote" || snapshot.current?.connectionId === next.connectionId);
+        const sameDirectory = sameProvider && snapshot.current?.location === next.location;
+        const returned = sameProvider ? returnCursor(snapshot.current, next) : undefined;
         const focus = !!gridRoot.current?.contains(document.activeElement) ||
           (!snapshot.current && activeRef.current && document.activeElement === document.body);
         const view = sameDirectory ? capture() : { current: returned, top: returned,
@@ -205,6 +243,7 @@ export const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(function Fi
           setFocusedRow(undefined);
         }
         snapshot.current = next;
+        requestedConnection.current = next.source === "remote" ? next.connectionId : undefined;
         setDirectory(next);
         setSelectedHome(previous => selectedHomeAfterNavigation(previous, next, request));
         setLoading(false);
@@ -215,12 +254,12 @@ export const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(function Fi
       },
     });
     loader.current = reader;
-    reader.request({ path: "", location: "", baseLocation: "" });
+    reader.request({ path: "", location: "", baseLocation: "", source: "local" });
     return () => { reader.dispose(); loader.current = undefined; };
   }, []);
 
-  function navigate(request: Omit<PanelNavigationRequest, "baseLocation"> & { baseLocation?: string }) {
-    loader.current?.request({ ...request, baseLocation: request.baseLocation ?? "" });
+  function navigate(request: PanelNavigationTarget) {
+    loader.current?.request(panelNavigationRequest(request, snapshot.current));
   }
   function refresh() { navigate({ path: "", location: snapshot.current?.location ?? "" }); }
   function parent() {
@@ -239,9 +278,9 @@ export const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(function Fi
     }}
       sx={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column",
         border: "2px solid", borderColor: active ? "primary.main" : "divider", bgcolor: "background.paper" }}>
-      <VolumeBar label={label} directory={directory} selectedHome={selectedHome} choose={(location, volumeId, home) => {
+      {directory?.source !== "remote" && <VolumeBar label={label} directory={directory} selectedHome={selectedHome} choose={(location, volumeId, home) => {
         dispatch("panel.goToLocation", home ? { location, home: true } : volumeId === undefined ? { location } : { location, volumeId });
-      }} />
+      }} />}
       <Box sx={{ px: 1, minHeight: 32, display: "flex", alignItems: "center", minWidth: 0 }}>
         {editingPath ? <TextField size="small" variant="standard" fullWidth autoFocus value={draft}
           slotProps={{ htmlInput: { "aria-label": `Путь: ${label}`, spellCheck: false } }}

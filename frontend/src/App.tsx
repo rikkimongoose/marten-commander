@@ -43,7 +43,7 @@ export default function App() {
   const [, setCommandContextVersion] = useState(0);
   const commandContextChanged = useCallback(() => setCommandContextVersion(version => version + 1), []);
   const [commands] = useState(() => {
-    const empty = () => ({ directoryLocation: null, selectedLocations: [], focusedLocation: null, focusedKind: null, focusedViewLocation: null });
+    const empty = () => ({ source: "local" as const, directoryLocation: null, selectedLocations: [], focusedLocation: null, focusedKind: null, focusedViewLocation: null });
     const dispatcher = new CommandDispatcher(() => ({
       activePanel: activeRef.current,
       left: left.current?.getContext() ?? empty(),
@@ -221,7 +221,15 @@ export default function App() {
     <AgGridProvider modules={[AllCommunityModule]}>
       <CssBaseline />
       <Box sx={{ height: "100vh", display: "flex", flexDirection: "column", p: 1, gap: 1, position: "relative" }}>
-        <Box component="nav" aria-label="Главное меню" sx={{ minHeight: 32 }}><SFTPConnections /></Box>
+        <Box component="nav" aria-label="Главное меню" sx={{ minHeight: 32 }}><SFTPConnections
+          connected={(_profile, connectionId) => {
+            const handle = activeRef.current === "left" ? left.current : right.current;
+            handle?.openRemote(connectionId);
+          }}
+          disconnected={connectionId => {
+            left.current?.disconnectRemote(connectionId);
+            right.current?.disconnectRemote(connectionId);
+          }} /></Box>
         {commandError && <Alert severity="error" onClose={() => setCommandError("")}>{commandError}</Alert>}
         <Box sx={{ display: "flex", flex: 1, minHeight: 0, gap: 1 }}>
           <FilePanel ref={left} label="Левая панель" active={active === "left"} activate={() => activate("left")}

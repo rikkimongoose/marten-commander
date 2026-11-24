@@ -9,7 +9,10 @@ import { emptySFTPProfile, profileForSave, sftpProfileError } from "./sftpProfil
 const activeAttempt = (status?: AttemptStatus) => status?.state === "connecting" || status?.state === "awaiting_host_key";
 const lockedConnection = (status?: AttemptStatus) => activeAttempt(status) || status?.state === "connected";
 
-export function SFTPConnections() {
+export function SFTPConnections({ connected, disconnected }: {
+  connected: (profile: ConnectionProfile, connectionId: string) => void;
+  disconnected: (connectionId: string) => void;
+}) {
   const [anchor, setAnchor] = useState<HTMLElement>();
   const [open, setOpen] = useState(false);
   const [profiles, setProfiles] = useState<ConnectionProfile[]>([]);
@@ -26,6 +29,7 @@ export function SFTPConnections() {
   const polling = useRef(0);
   const openRef = useRef(false);
   const connectPending = useRef(false);
+  const presentedConnection = useRef("");
   const selected = profiles.find(profile => profile.id === selectedID);
 
   async function loadProfiles() {
@@ -58,6 +62,16 @@ export function SFTPConnections() {
     polling.current = window.setTimeout(poll, 100);
     return () => { live = false; window.clearTimeout(polling.current); };
   }, [status?.attemptId, status?.state]);
+
+  useEffect(() => {
+    if (status?.state !== "connected" || !status.connectionId || presentedConnection.current === status.connectionId) return;
+    const profile = profiles.find(value => value.id === status.profileId);
+    if (!profile) return;
+    presentedConnection.current = status.connectionId;
+    connected(profile, status.connectionId);
+    openRef.current = false;
+    setOpen(false);
+  }, [status?.state, status?.connectionId, status?.profileId, profiles, connected]);
 
   function choose(profile: ConnectionProfile) {
     if (lockedConnection(status)) return;
@@ -120,7 +134,8 @@ export function SFTPConnections() {
 
   async function disconnect() {
     if (!status?.connectionId) return;
-    try { await Disconnect(status.connectionId); setStatus(undefined); }
+    const connectionId = status.connectionId;
+    try { await Disconnect(connectionId); disconnected(connectionId); presentedConnection.current = ""; setStatus(undefined); }
     catch (reason) { setError(message(reason)); }
   }
 

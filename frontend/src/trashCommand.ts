@@ -32,6 +32,7 @@ export function registerTrashCommand(dispatcher: CommandDispatcher, actions: Tra
   dispatcher.register("file.trash", {
     available: context => {
       const source = sourceAndTarget(context).source;
+      if (source.source === "remote") return { enabled: false, reason: "Удаление на SFTP пока недоступно." };
       return source.directoryLocation !== null && effectiveSelection(source).some(location => location !== "..")
         ? { enabled: true } : { enabled: false, reason: "Не выбраны объекты для корзины." };
     },

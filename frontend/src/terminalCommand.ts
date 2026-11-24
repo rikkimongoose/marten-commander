@@ -4,8 +4,12 @@ import { CommandError, sourceAndTarget, type CommandDispatcher, type CommandRequ
 export function registerTerminalCommand(dispatcher: CommandDispatcher,
   executeBackend: (request: CommandRequest) => void | PromiseLike<void> = createCommandBackend()) {
   dispatcher.register("terminal.run", {
-    available: context => sourceAndTarget(context).source.directoryLocation === null
-      ? { enabled: false, reason: "Откройте локальный каталог для запуска команды." } : { enabled: true },
+    available: context => {
+      const source = sourceAndTarget(context).source;
+      if (source.source === "remote") return { enabled: false, reason: "Командная строка не запускается для SFTP-панели." };
+      return source.directoryLocation === null
+        ? { enabled: false, reason: "Откройте локальный каталог для запуска команды." } : { enabled: true };
+    },
     execute: request => {
       const command = request.params.command;
       if (typeof command !== "string" || command.includes("\0")) {

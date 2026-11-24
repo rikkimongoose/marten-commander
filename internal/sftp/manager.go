@@ -65,9 +65,12 @@ type attempt struct {
 }
 
 type session struct {
-	profileID string
-	ssh       *ssh.Client
-	sftp      *pkgsftp.Client
+	profileID   string
+	ssh         *ssh.Client
+	sftp        *pkgsftp.Client
+	remote      remoteClient
+	initialPath string
+	timeout     time.Duration
 }
 
 type Manager struct {
@@ -305,7 +308,12 @@ func (m *Manager) run(ctx context.Context, item *attempt, profile ConnectionProf
 		m.fail(item, err)
 		return
 	}
-	current := &session{profileID: profile.ID, ssh: sshClient, sftp: sftpClient}
+	readTimeout := time.Duration(profile.TimeoutSeconds) * time.Second
+	if readTimeout <= 0 {
+		readTimeout = 15 * time.Second
+	}
+	current := &session{profileID: profile.ID, ssh: sshClient, sftp: sftpClient, remote: sftpClient,
+		initialPath: profile.RemotePath, timeout: readTimeout}
 	m.mu.Lock()
 	m.sessions[connectionID] = current
 	m.mu.Unlock()
@@ -548,7 +556,14 @@ func (m *Manager) pruneAttemptsLocked() {
 }
 
 func closeSession(current *session) error {
-	return errors.Join(current.sftp.Close(), current.ssh.Close())
+	var result error
+	if current.sftp != nil {
+		result = errors.Join(result, current.sftp.Close())
+	}
+	if current.ssh != nil {
+		result = errors.Join(result, current.ssh.Close())
+	}
+	return result
 }
 
 func connectionError(ctx context.Context, prefix string, err error) error {

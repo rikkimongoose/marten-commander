@@ -15,6 +15,10 @@ import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wails
 // @ts-ignore: Unused imports
 import * as sftp$0 from "../sftp/models.js";
 
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as $models from "./models.js";
+
 export function CancelConnection(attemptID: string): $CancellablePromise<void> {
     return $Call.ByID(1626818701, attemptID);
 }
@@ -37,6 +41,14 @@ export function GetConnectionStatus(attemptID: string): $CancellablePromise<sftp
 
 export function ListProfiles(): $CancellablePromise<sftp$0.ConnectionProfile[] | null> {
     return $Call.ByID(1879216793);
+}
+
+/**
+ * ReadRemoteDirectory browses only an existing Manager session: authentication,
+ * host-key policy and session ownership remain in the connection flow.
+ */
+export function ReadRemoteDirectory(request: $models.RemoteDirectoryRequest): $CancellablePromise<$models.Directory> {
+    return $Call.ByID(3854665596, request);
 }
 
 export function ResolveHostKey(attemptID: string, challengeID: string, accept: boolean): $CancellablePromise<void> {

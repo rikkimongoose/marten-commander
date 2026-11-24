@@ -120,3 +120,19 @@ test("immediate cleanup is safe with Wails promises (React StrictMode)", async (
   assert.deepEqual(results, []);
   assert.deepEqual(errors, []);
 });
+
+test("disconnect invalidation drops a late reply from the old SFTP session", async () => {
+  const f = fixture();
+  f.loader.request({ path: "/old", location: "", source: "remote", connectionId: "old-session" });
+  f.loader.invalidate();
+  f.loader.request({ path: "", location: "local-root", source: "local" });
+  f.calls[0].resolve({ source: "remote", connectionId: "old-session", location: "old" });
+  await tick();
+  assert.deepEqual(f.results, []);
+  assert.deepEqual(f.errors, []);
+  assert.equal(f.calls.length, 2);
+  assert.equal(f.calls[1].request.source, "local");
+  f.calls[1].resolve({ source: "local", location: "local-root" });
+  await tick();
+  assert.deepEqual(f.results, [{ source: "local", location: "local-root" }]);
+});

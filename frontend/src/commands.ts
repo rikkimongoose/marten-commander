@@ -6,6 +6,8 @@ export type CommandId = "panel.selectAll" | "panel.goToLocation" | "panel.openEn
 // Locations are base64url-encoded absolute native paths, as in Directory/Entry
 // DTOs. Display strings cannot address files with escaped or non-UTF-8 names.
 export interface PanelContext {
+  readonly source: "local" | "remote";
+  readonly connectionId?: string;
   readonly directoryLocation: string | null;
   readonly selectedLocations: readonly string[];
   readonly focusedLocation: string | null;
@@ -65,7 +67,10 @@ export function effectiveSelection(panel: PanelContext): readonly string[] {
 
 export function snapshotContext(context: CommandContext): CommandContext {
   const panel = (value: PanelContext): PanelContext => {
-    if (!value || (value.directoryLocation !== null && typeof value.directoryLocation !== "string") ||
+    if (!value || (value.source !== undefined && value.source !== "local" && value.source !== "remote") ||
+      (value.source === "local" && value.connectionId !== undefined) ||
+      (value.source === "remote" && (typeof value.connectionId !== "string" || !value.connectionId)) ||
+      (value.directoryLocation !== null && typeof value.directoryLocation !== "string") ||
       (value.focusedLocation !== null && typeof value.focusedLocation !== "string") ||
       (value.focusedKind !== undefined && value.focusedKind !== null &&
         !["file", "directory", "symlink", "other"].includes(value.focusedKind)) ||
@@ -74,12 +79,14 @@ export function snapshotContext(context: CommandContext): CommandContext {
       throw new CommandError("invalid_context", "Некорректный контекст панели.");
     }
     return Object.freeze({
+      ...(value.source !== undefined ? { source: value.source } : {}),
+      ...(value.connectionId !== undefined ? { connectionId: value.connectionId } : {}),
       directoryLocation: value.directoryLocation,
       selectedLocations: Object.freeze([...value.selectedLocations]),
       focusedLocation: value.focusedLocation,
       ...(value.focusedKind !== undefined ? { focusedKind: value.focusedKind } : {}),
       ...(value.focusedViewLocation !== undefined ? { focusedViewLocation: value.focusedViewLocation } : {}),
-    });
+    }) as PanelContext;
   };
   if (!context || (context.activePanel !== "left" && context.activePanel !== "right")) {
     throw new CommandError("invalid_context", "Неизвестная активная панель.");

@@ -39,6 +39,13 @@ export class DirectoryLoader<Request extends DirectoryRequest = DirectoryRequest
     this.cancelActive();
   }
 
+  invalidate() {
+    if (this.disposed) return;
+    this.version++;
+    this.pending = undefined;
+    this.cancelActive();
+  }
+
   private cancelActive() {
     if (this.active?.cancel) {
       // A failed cancellation must not prevent the next request or become an

@@ -40,6 +40,8 @@ type Entry struct {
 }
 
 type Directory struct {
+	Source            string   `json:"source"`
+	ConnectionID      string   `json:"connectionId,omitempty"`
 	Location          string   `json:"location"`
 	ParentLocation    string   `json:"parentLocation"`
 	AncestorLocations []string `json:"ancestorLocations"` // Resolved parents, nearest first; excludes self.
@@ -102,6 +104,7 @@ func (s *DirectoryService) ReadDirectory(ctx context.Context, request DirectoryR
 		return Directory{}, fmt.Errorf("Не удалось прочитать каталог %s: %s", display(path), display(err.Error()))
 	}
 	result := Directory{
+		Source:   "local",
 		Location: encode(directory.Path), ParentLocation: encode(directory.Parent),
 		DisplayPath: display(directory.Path), Entries: make([]Entry, 0, len(directory.Entries)),
 		AncestorLocations: make([]string, 0),

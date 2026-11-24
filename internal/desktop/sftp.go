@@ -2,7 +2,13 @@ package desktop
 
 import (
 	"context"
+	"encoding/base64"
+	"errors"
 	"fmt"
+	"io/fs"
+	"path"
+	"strconv"
+	"strings"
 
 	remotesftp "github.com/rikkimongoose/marten-commander/internal/sftp"
 )
@@ -88,6 +94,73 @@ func (s *SFTPService) Disconnect(ctx context.Context, connectionID string) error
 		return err
 	}
 	return s.manager.Disconnect(connectionID)
+}
+
+type RemoteDirectoryRequest struct {
+	ConnectionID string `json:"connectionId"`
+	Path         string `json:"path"`
+	Location     string `json:"location"`
+	BaseLocation string `json:"baseLocation"`
+}
+
+// ReadRemoteDirectory browses only an existing Manager session: authentication,
+// host-key policy and session ownership remain in the connection flow.
+func (s *SFTPService) ReadRemoteDirectory(ctx context.Context, request RemoteDirectoryRequest) (Directory, error) {
+	if request.ConnectionID == "" {
+		return Directory{}, fmt.Errorf("SFTP-соединение не указано")
+	}
+	remotePath := request.Path
+	if request.Location != "" {
+		if remotePath != "" || request.BaseLocation != "" {
+			return Directory{}, fmt.Errorf("укажите путь или идентификатор каталога, но не оба")
+		}
+		decoded, err := base64.RawURLEncoding.Strict().DecodeString(request.Location)
+		if err != nil || len(decoded) == 0 {
+			return Directory{}, fmt.Errorf("некорректный идентификатор SFTP-каталога")
+		}
+		remotePath = string(decoded)
+	} else if request.BaseLocation != "" {
+		decoded, err := base64.RawURLEncoding.Strict().DecodeString(request.BaseLocation)
+		if err != nil || len(decoded) == 0 || remotePath == "" {
+			return Directory{}, fmt.Errorf("некорректный базовый SFTP-каталог")
+		}
+		if !path.IsAbs(remotePath) {
+			remotePath = path.Join(string(decoded), remotePath)
+		}
+	}
+	directory, err := s.manager.ReadDirectory(ctx, request.ConnectionID, remotePath)
+	if err != nil {
+		switch {
+		case errors.Is(err, fs.ErrInvalid):
+			return Directory{}, fmt.Errorf("укажите абсолютный POSIX-путь")
+		case errors.Is(err, fs.ErrPermission):
+			return Directory{}, fmt.Errorf("Нет прав на чтение SFTP-каталога %s", remotePath)
+		default:
+			return Directory{}, fmt.Errorf("Не удалось прочитать SFTP-каталог %s: %v", remotePath, err)
+		}
+	}
+	result := Directory{Source: "remote", ConnectionID: request.ConnectionID, Location: encode(directory.Path),
+		ParentLocation: encode(directory.Parent), DisplayPath: directory.Path, Entries: make([]Entry, 0, len(directory.Entries)),
+		AncestorLocations: make([]string, 0)}
+	for current := directory.Path; current != "/"; {
+		current = path.Dir(current)
+		result.AncestorLocations = append(result.AncestorLocations, encode(current))
+	}
+	for _, entry := range directory.Entries {
+		item := Entry{ID: encode(entry.Path), Name: entry.Name, Kind: entry.Kind, Hidden: entry.Hidden,
+			Navigable: entry.Navigable, Detail: entry.Detail}
+		if entry.Kind == "file" {
+			item.Size = strconv.FormatInt(entry.Size, 10)
+		}
+		if !entry.ModifiedAt.IsZero() {
+			item.ModifiedAt = entry.ModifiedAt.UTC().Format("2006-01-02T15:04:05.000000000Z")
+		}
+		if dot := strings.LastIndexByte(entry.Name, '.'); dot > 0 && !entry.Navigable {
+			item.Extension = entry.Name[dot+1:]
+		}
+		result.Entries = append(result.Entries, item)
+	}
+	return result, nil
 }
 
 func (s *SFTPService) ServiceShutdown() error { return s.manager.Close() }

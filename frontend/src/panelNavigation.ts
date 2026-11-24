@@ -1,8 +1,27 @@
 import type { Directory, DirectoryRequest, HomeDirectory, Volume } from "../bindings/github.com/rikkimongoose/marten-commander/internal/desktop/models";
 import { CommandError } from "./commands.ts";
 
-export type PanelNavigationRequest = DirectoryRequest & { volumeId?: string; home?: boolean };
+export type PanelNavigationRequest = DirectoryRequest & {
+  source: "local" | "remote";
+  connectionId?: string;
+  volumeId?: string;
+  home?: boolean;
+};
+export type PanelNavigationTarget = Omit<PanelNavigationRequest, "baseLocation" | "source"> & {
+  baseLocation?: string;
+  source?: "local" | "remote";
+};
 type Call<T> = PromiseLike<T> & { cancel?: () => void | PromiseLike<void> };
+
+export function panelNavigationRequest(target: PanelNavigationTarget, current?: Directory): PanelNavigationRequest {
+  const source = target.source ?? (current?.source === "remote" ? "remote" : "local");
+  const connectionId = source === "remote" ? target.connectionId ?? current?.connectionId : undefined;
+  return { ...target, source, connectionId, baseLocation: target.baseLocation ?? "" };
+}
+
+export function restoreLocalRequest(directory?: Directory): PanelNavigationRequest {
+  return { path: "", location: directory?.location ?? "", baseLocation: "", source: "local" };
+}
 
 // Called only for the latest successful directory read. Failed/obsolete choices
 // must not replace the shortcut associated with the visible snapshot.
@@ -40,4 +59,16 @@ export function createPanelReader(
     })();
     return Object.assign(promise, { cancel: () => { cancelled = true; return active.cancel?.(); } });
   };
+}
+
+export function createPanelDirectoryReader(
+  read: (request: DirectoryRequest) => Call<Directory>,
+  lookup: (request: DirectoryRequest) => Call<Volume>,
+  readRemote: (request: { connectionId: string; path: string; location: string; baseLocation: string }) => Call<Directory>,
+): (request: PanelNavigationRequest) => Call<Directory> {
+  const readLocal = createPanelReader(read, lookup);
+  return request => request.source === "remote"
+    ? readRemote({ connectionId: request.connectionId ?? "", path: request.path,
+        location: request.location, baseLocation: request.baseLocation })
+    : readLocal(request);
 }
