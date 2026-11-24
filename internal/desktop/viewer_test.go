@@ -30,6 +30,8 @@ type viewerFileStub struct {
 	block   bool
 	entered chan struct{}
 	size    int64
+	path    string
+	name    string
 }
 
 func (f *viewerFileStub) Metadata(context.Context) (viewer.Metadata, error) {
@@ -37,7 +39,14 @@ func (f *viewerFileStub) Metadata(context.Context) (viewer.Metadata, error) {
 	if size == 0 {
 		size = int64(len(f.data))
 	}
-	return viewer.Metadata{Name: "sample.bin", Path: "/sample.bin", Size: size, ModifiedAt: "now"}, nil
+	name, path := f.name, f.path
+	if name == "" {
+		name = "sample.bin"
+	}
+	if path == "" {
+		path = "/sample.bin"
+	}
+	return viewer.Metadata{Name: name, Path: path, Size: size, ModifiedAt: "now"}, nil
 }
 func (f *viewerFileStub) ReadAt(ctx context.Context, offset int64, length int) ([]byte, error) {
 	if f.block {

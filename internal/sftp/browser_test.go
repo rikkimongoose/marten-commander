@@ -1,8 +1,10 @@
 package sftp
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"reflect"
@@ -52,6 +54,8 @@ func (m *mockRemote) Stat(name string) (os.FileInfo, error) {
 	}
 	return value, nil
 }
+func (m *mockRemote) Lstat(name string) (os.FileInfo, error) { return m.Stat(name) }
+func (m *mockRemote) Open(string) (remoteFile, error)        { return nil, errors.ErrUnsupported }
 
 func browserManager(id string, remote remoteClient, initial string, timeout time.Duration) *Manager {
 	return &Manager{sessions: map[string]*session{id: {remote: remote, initialPath: initial, timeout: timeout}}, attempts: make(map[string]*attempt)}
@@ -137,6 +141,50 @@ func TestReadDirectoryAgainstLocalSFTPStand(t *testing.T) {
 	directory, err := manager.ReadDirectory(context.Background(), connected.ConnectionID, "/")
 	if err != nil || directory.Path != "/" || directory.Entries == nil {
 		t.Fatalf("root = %#v, %v", directory, err)
+	}
+	current, err := manager.session(connected.ConnectionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport, ok := current.remote.(packageRemoteClient)
+	if !ok {
+		t.Fatalf("unexpected remote transport %T", current.remote)
+	}
+	contents := bytes.Repeat([]byte("SFTP-данные\n"), 1024)
+	remoteName := "/файл с пробелами.txt"
+	created, err := transport.client.Create(remoteName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := created.Write(contents); err != nil {
+		t.Fatal(err)
+	}
+	if err := created.Close(); err != nil {
+		t.Fatal(err)
+	}
+	entry, err := manager.Lstat(context.Background(), connected.ConnectionID, remoteName)
+	if err != nil || entry.Kind != "file" || entry.Size != int64(len(contents)) {
+		t.Fatalf("lstat = %#v, %v", entry, err)
+	}
+	reader, err := manager.Open(context.Background(), connected.ConnectionID, remoteName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	downloaded, readErr := io.ReadAll(reader)
+	closeErr := reader.Close()
+	if readErr != nil || closeErr != nil || !bytes.Equal(downloaded, contents) {
+		t.Fatalf("downloaded %d bytes, read=%v close=%v", len(downloaded), readErr, closeErr)
+	}
+	viewed, err := manager.OpenViewerFile(context.Background(), connected.ConnectionID, remoteName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	chunk, err := viewed.ReadAt(context.Background(), 5, 128)
+	if err != nil || !bytes.Equal(chunk, contents[5:5+128]) {
+		t.Fatalf("viewer range = %q, %v", chunk, err)
+	}
+	if err := viewed.Close(); err != nil {
+		t.Fatal(err)
 	}
 	if err := manager.Disconnect(connected.ConnectionID); err != nil {
 		t.Fatal(err)

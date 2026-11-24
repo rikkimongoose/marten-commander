@@ -1,10 +1,11 @@
 import type { Directory, Entry } from "../bindings/github.com/rikkimongoose/marten-commander/internal/desktop/models";
 import type { RowSelectionOptions } from "ag-grid-community";
+import type { DirectorySizeStatus } from "./directorySizes.ts";
 
 // This ID cannot collide with a base64url filesystem address. It never crosses
 // the backend boundary or appears in the explicit file selection.
 export const PARENT_ROW_ID = "..";
-export type PanelRow = Entry & { parent?: true };
+export type PanelRow = Entry & { parent?: true; directorySize?: DirectorySizeStatus };
 
 export function hasParent(directory: Directory | undefined): boolean {
   return !!directory && directory.location !== directory.parentLocation;

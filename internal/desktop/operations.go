@@ -109,6 +109,8 @@ func OperationContextSnapshot(command CommandContext, params json.RawMessage) (o
 		ActivePanel: command.ActivePanel, Sources: append([]string(nil), source.effectiveSelection()...),
 		SourceDirectory: *source.DirectoryLocation, ParametersJSON: string(canonical),
 	}
+	snapshot.SourceType = source.Source
+	snapshot.SourceConnectionID = source.ConnectionID
 	if target.DirectoryLocation != nil {
 		value := *target.DirectoryLocation
 		snapshot.DestinationDirectory = &value

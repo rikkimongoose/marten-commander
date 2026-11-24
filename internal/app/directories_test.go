@@ -20,6 +20,27 @@ type source struct {
 	resolve func(context.Context, string) (string, error)
 }
 
+type sizeSource struct {
+	core.FileSystem
+	directories map[string][]core.FileEntry
+	kinds       map[string]core.EntryKind
+	errors      map[string]error
+}
+
+func (s sizeSource) ReadDir(_ context.Context, path string) ([]core.FileEntry, error) {
+	if err := s.errors[path]; err != nil {
+		return nil, err
+	}
+	return append([]core.FileEntry(nil), s.directories[path]...), nil
+}
+func (s sizeSource) Lstat(_ context.Context, path string) (core.FileEntry, error) {
+	kind, ok := s.kinds[path]
+	if !ok {
+		return core.FileEntry{}, fs.ErrNotExist
+	}
+	return core.FileEntry{Path: path, Kind: kind}, nil
+}
+
 func (s source) ReadDir(ctx context.Context, path string) ([]core.FileEntry, error) {
 	return s.read(ctx, path)
 }
@@ -108,6 +129,37 @@ func TestConcurrentRequestsAreIndependent(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("read did not stop after cancellation")
+	}
+}
+
+func TestCalculateDirectorySizeNestedEmptySkipsLinksAndFailsOnUnreadableSubtree(t *testing.T) {
+	provider := sizeSource{
+		kinds: map[string]core.EntryKind{"/root": core.KindDirectory, "/empty": core.KindDirectory},
+		directories: map[string][]core.FileEntry{
+			"/root": {
+				{Path: "/root/first", Kind: core.KindFile, Size: 5},
+				{Path: "/root/nested", Kind: core.KindDirectory},
+				{Path: "/root/link", Kind: core.KindSymlink, Size: 1 << 30},
+				{Path: "/root/socket", Kind: core.KindOther, Size: 1 << 30},
+			},
+			"/root/nested": {{Path: "/root/nested/second", Kind: core.KindFile, Size: 7},
+				{Path: "/root/nested/empty", Kind: core.KindDirectory}},
+			"/root/nested/empty": {},
+			"/empty":             {},
+		},
+		errors: map[string]error{},
+	}
+	service := app.NewDirectoryService(provider, nil, "/root")
+	if size, err := service.CalculateDirectorySize(context.Background(), "/root"); err != nil || size != 12 {
+		t.Fatalf("nested size = %d, %v", size, err)
+	}
+	if size, err := service.CalculateDirectorySize(context.Background(), "/empty"); err != nil || size != 0 {
+		t.Fatalf("empty size = %d, %v", size, err)
+	}
+	provider.errors["/root/nested"] = fs.ErrPermission
+	service = app.NewDirectoryService(provider, nil, "/root")
+	if _, err := service.CalculateDirectorySize(context.Background(), "/root"); !errors.Is(err, fs.ErrPermission) {
+		t.Fatalf("permission error = %v", err)
 	}
 }
 

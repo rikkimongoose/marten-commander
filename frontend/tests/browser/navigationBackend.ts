@@ -12,7 +12,8 @@ const state = { trashed: new Set<string>(), previews: [] as any[], reads: [] as 
   releaseMkdir: undefined as (() => void) | undefined, operations: [] as any[], conflictResolutions: [] as any[],
   viewerReads: [] as string[], viewerBinaryReads: [] as { offset: string; length: number }[], viewerMode: query.get("viewerMode") ?? "text",
   viewerBroken: query.has("viewerBroken"), viewerClosed: 0, viewerWindows: [] as string[],
-  sftpProfiles: [] as any[], sftpAttempts: new Map<string, any>(), sftpSecrets: [] as string[], sftpCancels: 0 };
+  sftpProfiles: [] as any[], sftpAttempts: new Map<string, any>(), sftpSecrets: [] as string[], sftpCancels: 0,
+  directorySizeRequests: [] as string[], directorySizeResolvers: new Map<string, (value: any) => void>() };
 Object.assign(window, { navigationTest: state });
 
 function resolve(path: string, base: string) {
@@ -41,6 +42,12 @@ export async function ReadDirectory(request: { path: string; location: string; b
   entries.push(...(state.created.get(path) ?? []).map(name => entry(`${path}/${name}`, true)));
   return { location: path, parentLocation: parent, displayPath: path, entries: entries.filter(item => !state.trashed.has(item.id)),
     initialHome: !initialRoot && !request.path && !request.location, ancestorLocations: path.startsWith(home + "/") ? [home, "/home", "/"] : [parent] };
+}
+export function CalculateDirectorySize(location: string) {
+  state.directorySizeRequests.push(location);
+  const result = new Promise<any>(resolve => state.directorySizeResolvers.set(location, resolve)) as Promise<any> & { cancel: () => Promise<void> };
+  result.cancel = async () => {};
+  return result;
 }
 
 export async function GetHomeDirectory() { return { location: home, displayPath: home }; }
@@ -77,6 +84,15 @@ export async function ResolveHostKey(attemptID: string, challengeID: string, acc
 }
 export async function CancelConnection(id: string) { state.sftpCancels++; Object.assign(state.sftpAttempts.get(id), { state: "cancelled" }); }
 export async function Disconnect(_id: string) {}
+export function ReadRemoteDirectory(request: { connectionId: string; path: string; location: string }) {
+  const decode = (value: string) => new TextDecoder().decode(Uint8Array.from(atob(value.replace(/-/g, "+").replace(/_/g, "/")), char => char.charCodeAt(0)));
+  const encode = (value: string) => btoa(String.fromCharCode(...new TextEncoder().encode(value))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  const remotePath = request.path || (request.location ? decode(request.location) : "/");
+  const parent = remotePath === "/" ? "/" : remotePath.slice(0, remotePath.lastIndexOf("/")) || "/";
+  return cancellable({ source: "remote", connectionId: request.connectionId,
+    location: encode(remotePath), parentLocation: encode(parent),
+    displayPath: remotePath, entries: [], initialHome: false, ancestorLocations: [] });
+}
 export async function ListOperations() { return state.operations; }
 export async function CancelOperation() { throw new Error("Test operation not found"); }
 export async function ResolveConflict(resolution: any) {
@@ -140,6 +156,7 @@ export function OpenViewer(location: string) {
   state.viewerWindows.push(location);
   return OpenFile();
 }
+export function OpenRemoteViewer(_connectionID: string, location: string) { return OpenViewer(location); }
 export function GetViewer(id: string) {
   const source = OpenFile();
   const result = source.then(file => ({ ...file, id })) as ReturnType<typeof OpenFile>;

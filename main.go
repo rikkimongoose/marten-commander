@@ -51,6 +51,7 @@ func main() {
 	knownHostsPath := filepath.Join(xdg.Home, ".ssh", "known_hosts")
 	sftpManager := remotesftp.NewManager(profileStore, knownHostsPath)
 	sftpService := desktop.NewSFTPService(profileStore, sftpManager)
+	downloadService := app.NewDownloadService(sftpManager, filesystem, operationManager)
 	viewerService := desktop.NewViewerService(viewer.LocalFileSource{})
 	var desktopApp *application.App
 	viewerWindows := desktop.NewViewerWindowService(viewerService, func(options desktop.ViewerWindowOptions) (desktop.ViewerWindow, error) {
@@ -59,12 +60,12 @@ func main() {
 			MinWidth: 480, MinHeight: 320, Hidden: true,
 		})
 		return nativeViewerWindow{window}, nil
-	})
+	}, sftpManager)
 	desktopApp = application.New(application.Options{
 		Name: "Marten Commander", Description: "Двухпанельный файловый менеджер",
 		Services: []application.Service{
 			application.NewService(desktop.NewDirectoryService(directories, initialIsHome)),
-			application.NewService(desktop.NewCommandServiceWithTrash(files, editor, copyService, moveService, terminal, trashService)),
+			application.NewService(desktop.NewCommandServiceWithRemote(files, editor, copyService, moveService, terminal, trashService, downloadService)),
 			application.NewService(viewerService),
 			application.NewService(viewerWindows),
 			application.NewService(desktop.NewVolumeService(volumes.NewService())),

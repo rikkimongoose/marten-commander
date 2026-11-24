@@ -23,7 +23,8 @@ test("single move restores cursor for either a renamed target or an existing des
   assert.deepEqual(moveFocusCandidates(value), []);
 });
 
-test("copy refreshes only destination and unrelated operations refresh nothing", () => {
+test("copy and download refresh only destination and unrelated operations refresh nothing", () => {
   assert.deepEqual(operationRefreshLocations(operation("file.copy", "source", "destination")), ["destination"]);
+  assert.deepEqual(operationRefreshLocations(operation("file.download", "source", "destination")), ["destination"]);
   assert.deepEqual(operationRefreshLocations(operation("file.mkdir", "source", "destination")), []);
 });

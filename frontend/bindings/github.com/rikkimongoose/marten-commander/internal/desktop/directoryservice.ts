@@ -9,6 +9,10 @@ import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wails
 // @ts-ignore: Unused imports
 import * as $models from "./models.js";
 
+export function CalculateDirectorySize(location: string): $CancellablePromise<$models.DirectorySize> {
+    return $Call.ByID(1091223105, location);
+}
+
 /**
  * Wails injects the call context; cancelling its generated promise cancels reads.
  */

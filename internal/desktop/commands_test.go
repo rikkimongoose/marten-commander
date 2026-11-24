@@ -38,6 +38,14 @@ type copyServiceStub struct {
 	err         error
 }
 
+type downloadServiceStub struct {
+	snapshot     operations.ContextSnapshot
+	connectionID string
+	sources      []string
+	destination  string
+	err          error
+}
+
 type editorServiceStub struct {
 	path string
 	err  error
@@ -48,6 +56,13 @@ func (s *editorServiceStub) Edit(_ context.Context, path string) error { s.path 
 func (s *copyServiceStub) Start(_ context.Context, snapshot operations.ContextSnapshot, sources []string, destination string) (operations.Operation, error) {
 	s.snapshot, s.sources, s.destination = snapshot, append([]string(nil), sources...), destination
 	return operations.Operation{ID: "copy-operation", State: operations.Running}, s.err
+}
+
+func (s *downloadServiceStub) Start(_ context.Context, snapshot operations.ContextSnapshot, connectionID string,
+	sources []string, destination string) (operations.Operation, error) {
+	s.snapshot, s.connectionID = snapshot, connectionID
+	s.sources, s.destination = append([]string(nil), sources...), destination
+	return operations.Operation{ID: "download-operation", State: operations.Running}, s.err
 }
 
 func (s *fileServiceStub) Open(_ context.Context, path string) error {
@@ -286,6 +301,40 @@ func TestCopyCommandUsesEffectiveSelectionAndEditedDestination(t *testing.T) {
 	}
 	if !reflect.DeepEqual(copies.sources, []string{focused}) {
 		t.Fatalf("cursor fallback: %q", copies.sources)
+	}
+}
+
+func TestCopyCommandCapturesRemoteSessionPOSIXSourcesAndLocalDestination(t *testing.T) {
+	request := commandFixture(t)
+	request.Type = "file.copy"
+	remoteDirectory := "/сервер/каталог с пробелами"
+	first, second := remoteDirectory+"/один.txt", remoteDirectory+"/два.bin"
+	encodedDirectory, encodedFirst, encodedSecond := encode(remoteDirectory), encode(first), encode(second)
+	request.Context.Left = PanelContext{Source: "remote", ConnectionID: "session-before-navigation",
+		DirectoryLocation: &encodedDirectory, SelectedLocations: []string{encodedFirst, encodedSecond}, FocusedLocation: &encodedFirst}
+	destination := filepath.Join(t.TempDir(), "локальное назначение")
+	request.Params = json.RawMessage(`{"destination":` + string(mustJSON(t, destination)) + `}`)
+	downloads := &downloadServiceStub{}
+	service := NewCommandServiceWithRemote(&fileServiceStub{}, nil, nil, nil, nil, nil, downloads)
+	if err := service.ExecuteCommand(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	if downloads.connectionID != "session-before-navigation" ||
+		!reflect.DeepEqual(downloads.sources, []string{first, second}) || downloads.destination != destination {
+		t.Fatalf("download start = %#v", downloads)
+	}
+	if downloads.snapshot.SourceType != "remote" || downloads.snapshot.SourceConnectionID != "session-before-navigation" ||
+		downloads.snapshot.SourceDirectory != encodedDirectory || downloads.snapshot.DestinationDirectory == nil ||
+		*downloads.snapshot.DestinationDirectory != encode(destination) {
+		t.Fatalf("snapshot = %#v", downloads.snapshot)
+	}
+
+	// Mutating the request after dispatch cannot alter the slices or session
+	// already handed to the operation.
+	request.Context.Left.ConnectionID = "new-session"
+	request.Context.Left.SelectedLocations[0] = encode(remoteDirectory + "/changed")
+	if downloads.connectionID != "session-before-navigation" || downloads.sources[0] != first {
+		t.Fatalf("captured download changed after navigation: %#v", downloads)
 	}
 }
 

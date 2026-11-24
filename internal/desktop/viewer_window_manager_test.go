@@ -44,6 +44,18 @@ type viewerWindowFactoryStub struct {
 	showErr error
 }
 
+type remoteViewerStub struct {
+	file         viewer.File
+	err          error
+	connectionID string
+	path         string
+}
+
+func (s *remoteViewerStub) OpenViewerFile(_ context.Context, connectionID, path string) (viewer.File, error) {
+	s.connectionID, s.path = connectionID, path
+	return s.file, s.err
+}
+
 func (f *viewerWindowFactoryStub) create(options ViewerWindowOptions) (ViewerWindow, error) {
 	if f.err != nil {
 		return nil, f.err
@@ -83,7 +95,7 @@ func TestViewerWindowsOpenIndependentlyAndCloseOne(t *testing.T) {
 			len(windows.windows), len(viewers.files))
 	}
 	if factory.options[0].Name != "viewer-"+first.ID || factory.options[0].URL != "/?viewer="+first.ID ||
-		factory.options[0].Title != first.Name+" — Marten Commander" {
+		factory.options[0].Title != first.Name+" — "+first.Path+" — Marten Commander" {
 		t.Fatalf("first window options = %#v", factory.options[0])
 	}
 	factory.windows[0].systemClose()
@@ -120,6 +132,43 @@ func TestViewerWindowsAllowSameFileTwiceAndReopenAfterClose(t *testing.T) {
 	}
 	if third.ID == first.ID || len(windows.windows) != 2 {
 		t.Fatalf("reopen failed: third=%q windows=%d", third.ID, len(windows.windows))
+	}
+}
+
+func TestRemoteViewerUsesCapturedSessionPathAndReleasesOnClose(t *testing.T) {
+	remotePath := "/remote/отчёт с пробелами.txt"
+	file := &viewerFileStub{data: []byte("remote viewer"), path: remotePath, name: "отчёт с пробелами.txt"}
+	remote := &remoteViewerStub{file: file}
+	viewers := NewViewerService(viewer.LocalFileSource{})
+	factory := &viewerWindowFactoryStub{}
+	windows := NewViewerWindowService(viewers, factory.create, remote)
+	opened, err := windows.OpenRemoteViewer(context.Background(), "session-1", encode(remotePath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if remote.connectionID != "session-1" || remote.path != remotePath || opened.Path != remotePath {
+		t.Fatalf("remote open = connection=%q path=%q file=%#v", remote.connectionID, remote.path, opened)
+	}
+	if factory.options[0].Title != opened.Name+" — "+opened.Path+" — Marten Commander" {
+		t.Fatalf("title = %q", factory.options[0].Title)
+	}
+	factory.windows[0].systemClose()
+	if file.closed.Load() != 1 || len(viewers.files) != 0 {
+		t.Fatalf("close count=%d sessions=%d", file.closed.Load(), len(viewers.files))
+	}
+}
+
+func TestRemoteViewerWindowFailureClosesRemoteFile(t *testing.T) {
+	file := &viewerFileStub{data: []byte("remote")}
+	remote := &remoteViewerStub{file: file}
+	viewers := NewViewerService(viewer.LocalFileSource{})
+	factory := &viewerWindowFactoryStub{showErr: errors.New("show failed")}
+	windows := NewViewerWindowService(viewers, factory.create, remote)
+	if _, err := windows.OpenRemoteViewer(context.Background(), "session-1", encode("/remote/file")); err == nil {
+		t.Fatal("failure accepted")
+	}
+	if file.closed.Load() != 1 || len(viewers.files) != 0 {
+		t.Fatalf("leak: closes=%d sessions=%d", file.closed.Load(), len(viewers.files))
 	}
 }
 

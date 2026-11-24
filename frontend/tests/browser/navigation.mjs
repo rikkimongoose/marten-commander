@@ -360,11 +360,19 @@ try {
   await page.keyboard.press("Tab"); await focused("right", "..");
   await page.keyboard.press("Tab"); await focused("left", `${home}/child`);
 
+  // Space keeps AG Grid's selection/cursor behaviour, but captures the local
+  // directory under the cursor before the grid can advance it.
+  await page.keyboard.press("Space"); await count("left", 1);
+  assert.deepEqual(await page.evaluate(() => window.navigationTest.directorySizeRequests), [`${home}/child`]);
+  await panel("left").locator(`.ag-row[row-id="${home}/child"] .ag-cell[col-id="size"]`).getByText("Считается…").waitFor();
+
   // Double click/Enter/down/up; returned cursor is independent of selection.
   await cell("left", `${home}/child`).dblclick(); await path("left", `${home}/child`);
+  await page.evaluate(location => window.navigationTest.directorySizeResolvers.get(location)?.({ location, size: "12" }), `${home}/child`);
   await path("right", home); await count("left", 0);
   await cell("left", "..").click(); await page.keyboard.press("Enter");
   await path("left", home); await focused("left", `${home}/child`); await count("left", 0);
+  await panel("left").locator(`.ag-row[row-id="${home}/child"] .ag-cell[col-id="size"]`).getByText("12").waitFor();
   await page.keyboard.press("Enter"); await path("left", `${home}/child`);
   await page.keyboard.press("Backspace"); await path("left", home); await focused("left", `${home}/child`);
   await cell("left", `${home}/child`).dblclick(); await path("left", `${home}/child`);

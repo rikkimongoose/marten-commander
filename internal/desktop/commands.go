@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -81,6 +82,10 @@ type moveCommandService interface {
 	Start(context.Context, operations.ContextSnapshot, []string, string) (operations.Operation, error)
 }
 
+type downloadCommandService interface {
+	Start(context.Context, operations.ContextSnapshot, string, []string, string) (operations.Operation, error)
+}
+
 type editorCommandService interface {
 	Edit(context.Context, string) error
 }
@@ -92,12 +97,13 @@ type terminalCommandService interface {
 // CommandService is the Wails transport boundary. It decodes opaque native
 // locations and delegates supported use cases to the application layer.
 type CommandService struct {
-	files    fileCommandService
-	copies   copyCommandService
-	moves    moveCommandService
-	editor   editorCommandService
-	terminal terminalCommandService
-	trash    trashCommandService
+	files     fileCommandService
+	copies    copyCommandService
+	moves     moveCommandService
+	editor    editorCommandService
+	terminal  terminalCommandService
+	trash     trashCommandService
+	downloads downloadCommandService
 }
 
 func NewCommandService(files fileCommandService, copies ...copyCommandService) *CommandService {
@@ -132,6 +138,13 @@ func NewCommandServiceWithTrash(files fileCommandService, editor editorCommandSe
 	return service
 }
 
+func NewCommandServiceWithRemote(files fileCommandService, editor editorCommandService, copies copyCommandService,
+	moves moveCommandService, terminal terminalCommandService, trash trashCommandService, downloads downloadCommandService) *CommandService {
+	service := NewCommandServiceWithTrash(files, editor, copies, moves, terminal, trash)
+	service.downloads = downloads
+	return service
+}
+
 func (s *CommandService) ExecuteCommand(ctx context.Context, request CommandRequest) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -149,8 +162,8 @@ func (s *CommandService) ExecuteCommand(ctx context.Context, request CommandRequ
 			return &CommandError{"unavailable", "Команда пока доступна только для локальной панели."}
 		}
 	case "file.copy", "file.move":
-		if !source.local() || !target.local() {
-			return &CommandError{"unavailable", "Копирование и перемещение между локальной и SFTP-панелью появится в следующей задаче."}
+		if !target.local() || request.Type == "file.move" && !source.local() {
+			return &CommandError{"unavailable", "Запись на SFTP-сервер запрещена."}
 		}
 	}
 	// The envelope requires a JSON object. Each future supported type must decode
@@ -298,23 +311,28 @@ func (s *CommandService) ExecuteCommand(ctx context.Context, request CommandRequ
 			return &CommandError{"unavailable", "Исходный каталог ещё не открыт."}
 		}
 		sourceDirectory, ok := decodeLocation(*sourcePanel.DirectoryLocation)
+		if !sourcePanel.local() {
+			sourceDirectory, ok = decodeRemoteLocation(*sourcePanel.DirectoryLocation)
+		}
 		if !ok {
 			return &CommandError{"invalid_context", "Некорректный адрес исходного каталога."}
 		}
 		locations := sourcePanel.effectiveSelection()
 		sources := make([]string, 0, len(locations))
 		for _, location := range locations {
-			path, valid := decodeLocation(location)
-			if !valid || filepath.Dir(path) != filepath.Clean(sourceDirectory) || filepath.Base(path) == "." || filepath.Base(path) == ".." {
+			pathValue, valid := decodeLocation(location)
+			parent, base := filepath.Dir(pathValue), filepath.Base(pathValue)
+			if !sourcePanel.local() {
+				pathValue, valid = decodeRemoteLocation(location)
+				parent, base = path.Dir(pathValue), path.Base(pathValue)
+			}
+			if !valid || parent != sourceDirectory || base == "." || base == ".." {
 				return &CommandError{"invalid_context", "Источник копирования не принадлежит открытому каталогу."}
 			}
-			sources = append(sources, path)
+			sources = append(sources, pathValue)
 		}
 		if len(sources) == 0 {
 			return &CommandError{"unavailable", "Не выбран файл или каталог для копирования."}
-		}
-		if s.copies == nil {
-			return &CommandError{"unavailable", "Копирование файлов недоступно."}
 		}
 		snapshot, err := OperationContextSnapshot(request.Context, request.Params)
 		if err != nil {
@@ -322,16 +340,28 @@ func (s *CommandService) ExecuteCommand(ctx context.Context, request CommandRequ
 		}
 		encodedDestination := encode(destination)
 		snapshot.DestinationDirectory = &encodedDestination
-		if _, err := s.copies.Start(ctx, snapshot, sources, destination); err != nil {
+		var startErr error
+		if sourcePanel.local() {
+			if s.copies == nil {
+				return &CommandError{"unavailable", "Копирование файлов недоступно."}
+			}
+			_, startErr = s.copies.Start(ctx, snapshot, sources, destination)
+		} else {
+			if s.downloads == nil {
+				return &CommandError{"unavailable", "Скачивание SFTP-файлов недоступно."}
+			}
+			_, startErr = s.downloads.Start(ctx, snapshot, sourcePanel.ConnectionID, sources, destination)
+		}
+		if startErr != nil {
 			switch {
-			case errors.Is(err, fs.ErrInvalid):
-				return &CommandError{"invalid_params", err.Error()}
-			case errors.Is(err, fs.ErrNotExist):
+			case errors.Is(startErr, fs.ErrInvalid):
+				return &CommandError{"invalid_params", startErr.Error()}
+			case errors.Is(startErr, fs.ErrNotExist):
 				return &CommandError{"copy_failed", "Каталог назначения больше не существует."}
-			case errors.Is(err, fs.ErrPermission):
+			case errors.Is(startErr, fs.ErrPermission):
 				return &CommandError{"copy_failed", fmt.Sprintf("Недостаточно прав для копирования в %q.", display(destination))}
 			default:
-				return &CommandError{"copy_failed", fmt.Sprintf("Не удалось начать копирование: %v", err)}
+				return &CommandError{"copy_failed", fmt.Sprintf("Не удалось начать копирование: %v", startErr)}
 			}
 		}
 		return nil
@@ -416,6 +446,12 @@ func decodeLocation(location string) (string, bool) {
 		!strings.ContainsRune(string(path), 0)
 }
 
+func decodeRemoteLocation(location string) (string, bool) {
+	value, err := base64.RawURLEncoding.Strict().DecodeString(location)
+	decoded := string(value)
+	return decoded, err == nil && encode(decoded) == location && path.IsAbs(decoded) && !strings.ContainsRune(decoded, 0)
+}
+
 func validateCommandContext(c CommandContext) error {
 	invalid := func() error {
 		return &CommandError{"invalid_context", "Некорректный контекст панелей или адрес файла."}
@@ -439,16 +475,20 @@ func validateCommandContext(c CommandContext) error {
 			}
 			continue
 		}
-		if _, ok := decodeLocation(*panel.DirectoryLocation); !ok {
+		decode := decodeLocation
+		if !panel.local() {
+			decode = decodeRemoteLocation
+		}
+		if _, ok := decode(*panel.DirectoryLocation); !ok {
 			return invalid()
 		}
 		for _, location := range panel.SelectedLocations {
-			if _, ok := decodeLocation(location); !ok {
+			if _, ok := decode(location); !ok {
 				return invalid()
 			}
 		}
 		if panel.FocusedLocation != nil {
-			if _, ok := decodeLocation(*panel.FocusedLocation); !ok {
+			if _, ok := decode(*panel.FocusedLocation); !ok {
 				return invalid()
 			}
 		}

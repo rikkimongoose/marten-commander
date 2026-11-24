@@ -312,7 +312,7 @@ func (m *Manager) run(ctx context.Context, item *attempt, profile ConnectionProf
 	if readTimeout <= 0 {
 		readTimeout = 15 * time.Second
 	}
-	current := &session{profileID: profile.ID, ssh: sshClient, sftp: sftpClient, remote: sftpClient,
+	current := &session{profileID: profile.ID, ssh: sshClient, sftp: sftpClient, remote: packageRemoteClient{sftpClient},
 		initialPath: profile.RemotePath, timeout: readTimeout}
 	m.mu.Lock()
 	m.sessions[connectionID] = current

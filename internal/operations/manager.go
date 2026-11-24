@@ -40,6 +40,8 @@ type ContextSnapshot struct {
 	SourceDirectory      string   `json:"sourceDirectory"`
 	DestinationDirectory *string  `json:"destinationDirectory"`
 	ParametersJSON       string   `json:"parametersJSON"`
+	SourceType           string   `json:"sourceType,omitempty"`
+	SourceConnectionID   string   `json:"sourceConnectionId,omitempty"`
 }
 
 type Progress struct {

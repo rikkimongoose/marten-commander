@@ -20,7 +20,7 @@ import { OperationsCenter } from "./OperationsCenter";
 import { CopyDialog } from "./CopyDialog";
 import type { Operation } from "../bindings/github.com/rikkimongoose/marten-commander/internal/operations/models";
 import { moveFocusCandidates, operationRefreshLocations } from "./operationRefresh";
-import { OpenViewer } from "../bindings/github.com/rikkimongoose/marten-commander/internal/desktop/viewerwindowservice";
+import { OpenRemoteViewer, OpenViewer } from "../bindings/github.com/rikkimongoose/marten-commander/internal/desktop/viewerwindowservice";
 import { SFTPConnections } from "./SFTPConnections";
 
 type MkdirDialogState = { open: boolean; destination: string; busy: boolean; error: string };
@@ -90,7 +90,7 @@ export default function App() {
       prompt: { open: openCopyDialog, retry: retryCopyDialog, complete: closeCopyDialog },
     }, {
       prompt: { open: openMoveDialog, retry: retryMoveDialog, complete: closeMoveDialog },
-    }, OpenViewer);
+    }, OpenViewer, undefined, OpenRemoteViewer);
     return dispatcher;
   });
 

@@ -5,7 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"path"
 	"sync"
+
+	"github.com/rikkimongoose/marten-commander/internal/viewer"
 )
 
 // ViewerWindow is the small native-window surface needed by the viewer
@@ -40,10 +43,19 @@ type ViewerWindowService struct {
 	factory ViewerWindowFactory
 	mu      sync.RWMutex
 	windows map[string]viewerWindowRecord
+	remote  remoteViewerOpener
 }
 
-func NewViewerWindowService(viewers *ViewerService, factory ViewerWindowFactory) *ViewerWindowService {
-	return &ViewerWindowService{viewers: viewers, factory: factory, windows: make(map[string]viewerWindowRecord)}
+type remoteViewerOpener interface {
+	OpenViewerFile(context.Context, string, string) (viewer.File, error)
+}
+
+func NewViewerWindowService(viewers *ViewerService, factory ViewerWindowFactory, remote ...remoteViewerOpener) *ViewerWindowService {
+	service := &ViewerWindowService{viewers: viewers, factory: factory, windows: make(map[string]viewerWindowRecord)}
+	if len(remote) > 0 {
+		service.remote = remote[0]
+	}
+	return service
 }
 
 func (s *ViewerWindowService) OpenViewer(ctx context.Context, location string) (file ViewerFile, err error) {
@@ -54,6 +66,33 @@ func (s *ViewerWindowService) OpenViewer(ctx context.Context, location string) (
 	if err != nil {
 		return ViewerFile{}, err
 	}
+	return s.openWindow(file)
+}
+
+func (s *ViewerWindowService) OpenRemoteViewer(ctx context.Context, connectionID, location string) (ViewerFile, error) {
+	if s.remote == nil {
+		return ViewerFile{}, &CommandError{"unavailable", "Просмотр SFTP-файлов недоступен."}
+	}
+	remotePath, ok := decodeRemoteLocation(location)
+	if !ok || path.Base(remotePath) == "." || path.Base(remotePath) == ".." {
+		return ViewerFile{}, &CommandError{"invalid_params", "Некорректный адрес SFTP-файла."}
+	}
+	f, err := s.remote.OpenViewerFile(ctx, connectionID, remotePath)
+	if err != nil {
+		return ViewerFile{}, viewerError("Не удалось открыть SFTP-файл", remotePath, err)
+	}
+	file, err := s.viewers.openPrepared(ctx, f, remotePath)
+	if err != nil {
+		return ViewerFile{}, err
+	}
+	return s.openWindow(file)
+}
+
+func (s *ViewerWindowService) openWindow(file ViewerFile) (result ViewerFile, err error) {
+	if s.factory == nil {
+		_ = s.viewers.CloseFile(file.ID)
+		return ViewerFile{}, &CommandError{"viewer_failed", "Создание окна Viewer недоступно."}
+	}
 	sessionID := file.ID
 	keep := false
 	defer func() {
@@ -63,7 +102,7 @@ func (s *ViewerWindowService) OpenViewer(ctx context.Context, location string) (
 	}()
 
 	window, err := s.createWindow(ViewerWindowOptions{
-		Name: "viewer-" + file.ID, Title: file.Name + " — Marten Commander",
+		Name: "viewer-" + file.ID, Title: file.Name + " — " + file.Path + " — Marten Commander",
 		URL: "/?viewer=" + url.QueryEscape(file.ID), Width: 960, Height: 720,
 	})
 	if err != nil {

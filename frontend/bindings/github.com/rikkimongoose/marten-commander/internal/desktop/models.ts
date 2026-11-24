@@ -53,6 +53,11 @@ export interface DirectoryRequest {
     "baseLocation": string;
 }
 
+export interface DirectorySize {
+    "location": string;
+    "size": string;
+}
+
 export interface Entry {
     "id": string;
     "name": string;

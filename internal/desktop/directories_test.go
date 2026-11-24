@@ -23,6 +23,10 @@ type source struct {
 	err     error
 }
 
+func (s *source) Lstat(_ context.Context, path string) (core.FileEntry, error) {
+	return core.FileEntry{Path: path, Kind: core.KindDirectory}, s.err
+}
+
 func (s *source) ReadDir(_ context.Context, path string) ([]core.FileEntry, error) {
 	s.seen = path
 	return s.entries, s.err
@@ -71,6 +75,25 @@ func TestDTOAndOpaquePathsRoundTrip(t *testing.T) {
 	}
 	if provider.seen != filepath.Dir(dir) {
 		t.Fatalf("wrong parent: %q", provider.seen)
+	}
+}
+
+func TestCalculateDirectorySizePreservesOpaqueIdentityAndFormatsExactBytes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "каталог с пробелами")
+	provider := &source{entries: []core.FileEntry{{Path: filepath.Join(path, "large.bin"), Kind: core.KindFile, Size: 9007199254740993}}}
+	service := NewDirectoryService(app.NewDirectoryService(provider, provider, path), false)
+	location := encode(path)
+	result, err := service.CalculateDirectorySize(context.Background(), location)
+	if err != nil || result.Location != location || result.Size != "9007199254740993" {
+		t.Fatalf("size result = %#v, %v", result, err)
+	}
+	if provider.seen != path {
+		t.Fatalf("calculated path = %q, want %q", provider.seen, path)
+	}
+	for _, invalid := range []string{"!invalid", encode("relative"), encode("/bad\x00path")} {
+		if _, err := service.CalculateDirectorySize(context.Background(), invalid); err == nil {
+			t.Fatalf("accepted invalid location %q", invalid)
+		}
 	}
 }
 

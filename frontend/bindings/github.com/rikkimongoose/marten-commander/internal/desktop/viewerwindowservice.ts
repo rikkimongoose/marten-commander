@@ -23,6 +23,10 @@ export function GetViewer(id: string): $CancellablePromise<$models.ViewerFile> {
     return $Call.ByID(4090405794, id);
 }
 
+export function OpenRemoteViewer(connectionID: string, location: string): $CancellablePromise<$models.ViewerFile> {
+    return $Call.ByID(962851664, connectionID, location);
+}
+
 export function OpenViewer(location: string): $CancellablePromise<$models.ViewerFile> {
     return $Call.ByID(2938367830, location);
 }

@@ -23,6 +23,7 @@ export type {
     CommandRequest,
     Directory,
     DirectoryRequest,
+    DirectorySize,
     Entry,
     HomeDirectory,
     PanelContext,

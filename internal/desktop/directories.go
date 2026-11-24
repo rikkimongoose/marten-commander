@@ -50,6 +50,11 @@ type Directory struct {
 	Entries           []Entry  `json:"entries"`
 }
 
+type DirectorySize struct {
+	Location string `json:"location"`
+	Size     string `json:"size"`
+}
+
 type DirectoryService struct {
 	directories   *app.DirectoryService
 	initialIsHome bool
@@ -138,6 +143,19 @@ func (s *DirectoryService) ReadDirectory(ctx context.Context, request DirectoryR
 		result.Entries = append(result.Entries, item)
 	}
 	return result, nil
+}
+
+func (s *DirectoryService) CalculateDirectorySize(ctx context.Context, location string) (DirectorySize, error) {
+	decoded, err := base64.RawURLEncoding.Strict().DecodeString(location)
+	path := string(decoded)
+	if err != nil || encode(path) != location || !filepath.IsAbs(path) || strings.ContainsRune(path, 0) {
+		return DirectorySize{}, fmt.Errorf("некорректный идентификатор локального каталога")
+	}
+	size, err := s.directories.CalculateDirectorySize(ctx, path)
+	if err != nil {
+		return DirectorySize{}, fmt.Errorf("Не удалось подсчитать размер каталога %s: %s", display(path), display(err.Error()))
+	}
+	return DirectorySize{Location: location, Size: strconv.FormatUint(size, 10)}, nil
 }
 
 func encode(path string) string { return base64.RawURLEncoding.EncodeToString([]byte(path)) }

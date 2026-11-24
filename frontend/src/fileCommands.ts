@@ -71,6 +71,7 @@ export function registerFileCommands(
   move?: MoveActions,
   openViewer?: (location: string) => PromiseLike<ViewerFile>,
   showViewer?: (file: ViewerFile) => void,
+  openRemoteViewer?: (connectionId: string, location: string) => PromiseLike<ViewerFile>,
 ) {
   dispatcher.register("file.open", {
     available: context => {
@@ -104,12 +105,22 @@ export function registerFileCommands(
   dispatcher.register("file.view", {
     available: context => {
       const source = sourceAndTarget(context).source;
-      if (source.source === "remote") return { enabled: false, reason: "Просмотр SFTP-файлов появится в #26." };
+      if (source.source === "remote") return source.focusedLocation && source.focusedKind === "file"
+        ? { enabled: true } : { enabled: false, reason: "SFTP Viewer открывает только обычные файлы." };
       return source.focusedViewLocation
         ? { enabled: true } : { enabled: false, reason: "Установите курсор на файл." };
     },
     execute: async request => {
       const source = sourceAndTarget(request.context).source;
+      if (source.source === "remote") {
+        if (!source.connectionId || !source.focusedLocation || source.focusedKind !== "file") {
+          throw new CommandError("unavailable", "SFTP Viewer открывает только обычные файлы.");
+        }
+        const open = openRemoteViewer ?? (await import("../bindings/github.com/rikkimongoose/marten-commander/internal/desktop/viewerwindowservice")).OpenRemoteViewer;
+        const file = await open(source.connectionId, source.focusedLocation);
+        showViewer?.(file);
+        return;
+      }
       if (!source.focusedViewLocation) throw new CommandError("unavailable", "Установите курсор на файл.");
       const open = openViewer ?? (await import("../bindings/github.com/rikkimongoose/marten-commander/internal/desktop/viewerwindowservice")).OpenViewer;
       const file = await open(source.focusedViewLocation);
@@ -147,7 +158,7 @@ export function registerFileCommands(
       const { source, target } = sourceAndTarget(context);
       if (source.directoryLocation === null) return { enabled: false, reason: "Исходный каталог ещё не открыт." };
       if (target.directoryLocation === null) return { enabled: false, reason: "Каталог назначения ещё не открыт." };
-      if (source.source === "remote" || target.source === "remote") return { enabled: false, reason: "Копирование с SFTP появится в #26." };
+      if (target.source === "remote") return { enabled: false, reason: "Запись на SFTP-сервер запрещена." };
       if (effectiveSelection(source).length === 0) return { enabled: false, reason: "Не выбран файл или каталог для копирования." };
       return { enabled: true };
     },

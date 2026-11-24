@@ -62,6 +62,8 @@ export interface ContextSnapshot {
     "sourceDirectory": string;
     "destinationDirectory": string | null;
     "parametersJSON": string;
+    "sourceType"?: string;
+    "sourceConnectionId"?: string;
 }
 
 export enum EntryKind {

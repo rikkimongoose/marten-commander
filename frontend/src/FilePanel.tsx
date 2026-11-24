@@ -3,7 +3,7 @@ import { Alert, Box, Button, ButtonBase, Checkbox, FormControlLabel, LinearProgr
 import { alpha } from "@mui/material/styles";
 import { AgGridReact } from "ag-grid-react";
 import type { ColDef, GridApi } from "ag-grid-community";
-import { ReadDirectory } from "../bindings/github.com/rikkimongoose/marten-commander/internal/desktop/directoryservice";
+import { CalculateDirectorySize, ReadDirectory } from "../bindings/github.com/rikkimongoose/marten-commander/internal/desktop/directoryservice";
 import { ReadRemoteDirectory } from "../bindings/github.com/rikkimongoose/marten-commander/internal/desktop/sftpservice";
 import type { Directory, HomeDirectory } from "../bindings/github.com/rikkimongoose/marten-commander/internal/desktop/models";
 import { DirectoryLoader } from "./directoryLoader";
@@ -15,6 +15,7 @@ import { createPanelDirectoryReader, panelNavigationRequest, restoreLocalRequest
   type PanelNavigationRequest, type PanelNavigationTarget } from "./panelNavigation";
 import { entryDestination, fileLocation, fileSelection, hasParent, panelRows, returnCursor, type PanelRow } from "./panelRows";
 import { isTextInput, panelKeyCommand } from "./panelKeyboard";
+import { applyDirectorySizes, DirectorySizeRequests, directorySizeTarget, type DirectorySizeStatus } from "./directorySizes";
 
 const kinds: Record<string, string> = { file: "Файл", directory: "Каталог", symlink: "Ссылка", other: "Спецфайл" };
 function column(field: SortField, headerName: string, width?: number): ColDef<PanelRow> {
@@ -28,7 +29,9 @@ const columns: ColDef<PanelRow>[] = [
   column("extension", "Расш.", 75),
   { field: "kind", headerName: "Тип", width: 95, sortable: false,
     valueFormatter: p => p.data?.parent ? "" : p.data?.kind === "symlink" && p.data.navigable ? "Ссылка → 📁" : kinds[p.value] || p.value },
-  { ...column("size", "Размер", 100), valueFormatter: p => p.value ? BigInt(p.value).toLocaleString("ru-RU") : "—" },
+  { ...column("size", "Размер", 130), valueFormatter: p => p.data?.directorySize?.state === "counting" ? "Считается…"
+    : p.data?.directorySize?.state === "failed" ? "Не удалось подсчитать"
+      : p.value ? BigInt(p.value).toLocaleString("ru-RU") : "—" },
   { ...column("modifiedAt", "Изменён", 170), valueFormatter: p => p.value ? new Date(p.value).toLocaleString("ru-RU") : "" },
 ];
 const defaultColumn: ColDef<PanelRow> = { sortable: true, resizable: true, cellDataType: false, sortingOrder: ["asc", "desc"] };
@@ -73,6 +76,7 @@ export const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(function Fi
   const [showHidden, setShowHidden] = useState(false);
   const [selectedCount, setSelectedCount] = useState(0);
   const [focusedRow, setFocusedRow] = useState<string>();
+  const [directorySizes, setDirectorySizes] = useState<Record<string, DirectorySizeStatus>>({});
   const snapshot = useRef<Directory>();
   const api = useRef<GridApi<PanelRow>>();
   const root = useRef<HTMLDivElement>(null);
@@ -93,7 +97,10 @@ export const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(function Fi
   const showHiddenRef = useRef(showHidden);
   showHiddenRef.current = showHidden;
   const entries = useMemo(() => visibleEntries(directory?.entries ?? [], showHidden), [directory, showHidden]);
-  const rows = useMemo(() => panelRows(directory, entries), [directory, entries]);
+  const rows = useMemo(() => applyDirectorySizes(panelRows(directory, entries), directorySizes), [directory, entries, directorySizes]);
+  const sizeRequests = useMemo(() => new DirectorySizeRequests(CalculateDirectorySize, (location, status) => {
+    setDirectorySizes(previous => ({ ...previous, [location]: status }));
+  }), []);
 
   // AG Grid does not automatically re-evaluate getRowClass when only the
   // external keyboard-cursor state changes. Redrawing rows updates classes and
@@ -360,7 +367,13 @@ export const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(function Fi
         })} onKeyDownCapture={event => {
         if (!(event.target instanceof Element)) return;
         const inCell = !!event.target.closest(".ag-cell");
-        const command = panelKeyCommand(event.nativeEvent, isTextInput(event.target));
+        const textInput = isTextInput(event.target);
+        if (inCell && event.nativeEvent.key === " " && !event.nativeEvent.isComposing && !textInput) {
+          const row = current.current ? api.current?.getRowNode(current.current)?.data : undefined;
+          const location = directorySizeTarget(snapshot.current, row);
+          if (location) sizeRequests.start(location);
+        }
+        const command = panelKeyCommand(event.nativeEvent, textInput);
         if (!command || (!inCell && event.target !== gridRoot.current && command !== "panel.switch")) return;
         event.preventDefault(); event.stopPropagation();
         if (command === "panel.openEntry") open(current.current ? api.current?.getRowNode(current.current)?.data : undefined);

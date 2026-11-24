@@ -77,11 +77,22 @@ func (s *ViewerService) OpenFile(ctx context.Context, location string) (ViewerFi
 	if !ok {
 		return ViewerFile{}, &CommandError{"invalid_params", "Некорректный адрес файла."}
 	}
-	f, err := s.source.Open(ctx, path)
+	return s.openSource(ctx, s.source, path)
+}
+
+func (s *ViewerService) openSource(ctx context.Context, source viewer.FileSource, path string) (ViewerFile, error) {
+	f, err := source.Open(ctx, path)
 	if err != nil {
 		return ViewerFile{}, viewerError("Не удалось открыть файл", path, err)
 	}
+	return s.openPrepared(ctx, f, path)
+}
+
+func (s *ViewerService) openPrepared(ctx context.Context, f viewer.File, path string) (ViewerFile, error) {
 	keep := false
+	if f == nil {
+		return ViewerFile{}, &CommandError{"viewer_failed", "SFTP-файл не открыт."}
+	}
 	defer func() {
 		if !keep {
 			_ = f.Close()
