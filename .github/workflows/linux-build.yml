@@ -15,9 +15,9 @@ env:
   NODE_VERSION: 24
   WAILS_VERSION: v3.0.0
   BINARY_PATH: bin/marten-commander
-  RELEASE_VERSION: v0.2.0
-  ARCHIVE_STEM: marten-commander-v0.2.0-linux-amd64
-  ARCHIVE_NAME: marten-commander-v0.2.0-linux-amd64.tar.gz
+  RELEASE_VERSION: v0.3.0
+  ARCHIVE_STEM: marten-commander-v0.3.0-linux-amd64
+  ARCHIVE_NAME: marten-commander-v0.3.0-linux-amd64.tar.gz
 
 jobs:
   build:
@@ -81,7 +81,10 @@ jobs:
         run: go test ./...
 
       - name: Run Go tests with race detector
-        run: go test -race ./...
+        run: go test -race -count=1 ./...
+
+      - name: Run local SFTP integration test
+        run: go test -race -count=1 -v ./internal/sftp -run '^TestReadDirectoryAgainstLocalSFTPStand$'
 
       - name: Run go vet
         run: go vet ./...

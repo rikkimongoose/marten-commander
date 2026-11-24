@@ -10,8 +10,8 @@ info:
   productIdentifier: "io.github.rikkimongoose.martencommander" # The unique product identifier
   description: "Two-panel file manager" # The application description
   copyright: "(c) 2026 rikkimongoose" # Copyright text
-  comments: "Marten Commander v0.2.0" # Comments
-  version: "0.2.0" # The application version
+  comments: "Marten Commander v0.3.0" # Comments
+  version: "0.3.0" # The application version
   # cfBundleIconName: "appicon" # The macOS icon name in Assets.car icon bundles (optional)
   #                               # Should match the name of your .icon file without the extension
   #                               # If not set and Assets.car exists, defaults to "appicon"
