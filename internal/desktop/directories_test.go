@@ -23,6 +23,13 @@ type source struct {
 	err     error
 }
 
+type fileStyleStub map[string]string
+
+func (s fileStyleStub) Color(name string) (string, bool) {
+	color, ok := s[name]
+	return color, ok
+}
+
 func (s *source) Lstat(_ context.Context, path string) (core.FileEntry, error) {
 	return core.FileEntry{Path: path, Kind: core.KindDirectory}, s.err
 }
@@ -75,6 +82,30 @@ func TestDTOAndOpaquePathsRoundTrip(t *testing.T) {
 	}
 	if provider.seen != filepath.Dir(dir) {
 		t.Fatalf("wrong parent: %q", provider.seen)
+	}
+}
+
+func TestFileStyleAppliesOnlyToOrdinaryFilesForLocalAndRemoteDTOs(t *testing.T) {
+	styler := fileStyleStub{"photos.jpg": "#00AAFF"}
+	for _, test := range []struct {
+		kind string
+		want string
+	}{
+		{"file", "#00AAFF"},
+		{"directory", ""},
+		{"symlink", ""},
+		{"other", ""},
+	} {
+		entry := Entry{Name: "photos.jpg", Kind: test.kind}
+		applyFileStyle(styler, entry.Kind, entry.Name, &entry)
+		if entry.Color != test.want {
+			t.Errorf("kind %s color = %q, want %q", test.kind, entry.Color, test.want)
+		}
+	}
+	entry := Entry{Name: "plain.txt", Kind: "file"}
+	applyFileStyle(styler, entry.Kind, entry.Name, &entry)
+	if entry.Color != "" {
+		t.Fatalf("unmatched file color = %q", entry.Color)
 	}
 }
 

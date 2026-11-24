@@ -16,6 +16,7 @@ import { createPanelDirectoryReader, panelNavigationRequest, restoreLocalRequest
 import { entryDestination, fileLocation, fileSelection, hasParent, panelRows, returnCursor, type PanelRow } from "./panelRows";
 import { isTextInput, panelKeyCommand } from "./panelKeyboard";
 import { applyDirectorySizes, DirectorySizeRequests, directorySizeTarget, type DirectorySizeStatus } from "./directorySizes";
+import { fileNameCellStyle } from "./fileStyles";
 
 const kinds: Record<string, string> = { file: "Файл", directory: "Каталог", symlink: "Ссылка", other: "Спецфайл" };
 function column(field: SortField, headerName: string, width?: number): ColDef<PanelRow> {
@@ -25,7 +26,8 @@ function column(field: SortField, headerName: string, width?: number): ColDef<Pa
   };
 }
 const columns: ColDef<PanelRow>[] = [
-  { ...column("name", "Имя"), initialSort: "asc", tooltipValueGetter: p => p.data?.detail || p.data?.name },
+  { ...column("name", "Имя"), initialSort: "asc", tooltipValueGetter: p => p.data?.detail || p.data?.name,
+    cellStyle: p => fileNameCellStyle(p.data) },
   column("extension", "Расш.", 75),
   { field: "kind", headerName: "Тип", width: 95, sortable: false,
     valueFormatter: p => p.data?.parent ? "" : p.data?.kind === "symlink" && p.data.navigable ? "Ссылка → 📁" : kinds[p.value] || p.value },

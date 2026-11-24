@@ -2,7 +2,8 @@
 // The production App, panels, CommandDispatcher and AG Grid remain unchanged.
 const entry = (id: string, directory = false) => ({ id, name: id.split("/").at(-1),
   kind: directory ? "directory" : "file", navigable: directory, hidden: false,
-  extension: directory ? "" : "txt", size: directory ? "" : "5", modifiedAt: "2026-01-01T00:00:00.000000000Z", detail: "" });
+  extension: directory ? "" : "txt", size: directory ? "" : "5", modifiedAt: "2026-01-01T00:00:00.000000000Z", detail: "",
+  color: !directory && id.endsWith("/two.txt") ? "#00AAFF" : "" });
 const home = "/home/test";
 const query = new URLSearchParams(window.location.search);
 const initialRoot = query.has("emptyRoot");

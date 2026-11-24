@@ -72,6 +72,7 @@ export interface Entry {
     "hidden": boolean;
     "navigable": boolean;
     "detail": string;
+    "color"?: string;
 }
 
 export interface HomeDirectory {

@@ -18,10 +18,15 @@ import (
 type SFTPService struct {
 	profiles *remotesftp.ProfileStore
 	manager  *remotesftp.Manager
+	styler   fileStyler
 }
 
-func NewSFTPService(profiles *remotesftp.ProfileStore, manager *remotesftp.Manager) *SFTPService {
-	return &SFTPService{profiles: profiles, manager: manager}
+func NewSFTPService(profiles *remotesftp.ProfileStore, manager *remotesftp.Manager, stylers ...fileStyler) *SFTPService {
+	service := &SFTPService{profiles: profiles, manager: manager}
+	if len(stylers) > 0 {
+		service.styler = stylers[0]
+	}
+	return service
 }
 
 func (s *SFTPService) ListProfiles(ctx context.Context) ([]remotesftp.ConnectionProfile, error) {
@@ -158,6 +163,7 @@ func (s *SFTPService) ReadRemoteDirectory(ctx context.Context, request RemoteDir
 		if dot := strings.LastIndexByte(entry.Name, '.'); dot > 0 && !entry.Navigable {
 			item.Extension = entry.Name[dot+1:]
 		}
+		applyFileStyle(s.styler, item.Kind, entry.Name, &item)
 		result.Entries = append(result.Entries, item)
 	}
 	return result, nil

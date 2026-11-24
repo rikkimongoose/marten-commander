@@ -37,6 +37,20 @@ type Entry struct {
 	Hidden     bool   `json:"hidden"`
 	Navigable  bool   `json:"navigable"`
 	Detail     string `json:"detail"`
+	Color      string `json:"color,omitempty"`
+}
+
+type fileStyler interface {
+	Color(string) (string, bool)
+}
+
+func applyFileStyle(styler fileStyler, kind, name string, entry *Entry) {
+	if styler == nil || kind != "file" {
+		return
+	}
+	if color, ok := styler.Color(name); ok {
+		entry.Color = color
+	}
 }
 
 type Directory struct {
@@ -58,10 +72,15 @@ type DirectorySize struct {
 type DirectoryService struct {
 	directories   *app.DirectoryService
 	initialIsHome bool
+	styler        fileStyler
 }
 
-func NewDirectoryService(directories *app.DirectoryService, initialIsHome bool) *DirectoryService {
-	return &DirectoryService{directories: directories, initialIsHome: initialIsHome}
+func NewDirectoryService(directories *app.DirectoryService, initialIsHome bool, stylers ...fileStyler) *DirectoryService {
+	service := &DirectoryService{directories: directories, initialIsHome: initialIsHome}
+	if len(stylers) > 0 {
+		service.styler = stylers[0]
+	}
+	return service
 }
 
 // Wails injects the call context; cancelling its generated promise cancels reads.
@@ -140,6 +159,7 @@ func (s *DirectoryService) ReadDirectory(ctx context.Context, request DirectoryR
 		if entry.TargetError != nil {
 			item.Detail = display(entry.TargetError.Error())
 		}
+		applyFileStyle(s.styler, item.Kind, entry.Name, &item)
 		result.Entries = append(result.Entries, item)
 	}
 	return result, nil

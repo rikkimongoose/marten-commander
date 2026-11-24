@@ -386,6 +386,8 @@ try {
   await focused("left", `${home}/child`);
   assert.match(await cell("left", `${home}/one.txt`).evaluate(element => getComputedStyle(element).color), /211, 47, 47/,
     "explicitly selected rows are red");
+  assert.match(await cell("left", `${home}/two.txt`).evaluate(element => getComputedStyle(element).color), /0, 170, 255/,
+    "configured name colour remains visible under multiple selection");
   assert.deepEqual(await panel("left").locator(".ag-row.ag-row-selected").evaluateAll(rows => rows.map(row => row.getAttribute("row-id")).sort()),
     [`${home}/one.txt`, `${home}/two.txt`], "Ctrl selects arbitrary rows without moving the cursor");
   await cell("left", `${home}/one.txt`).click();
@@ -417,6 +419,8 @@ try {
   assert.equal(await page.evaluate(() => window.navigationTest.opens.at(-1).params.location), `${home}/two.txt`);
   assert.equal(await page.evaluate(() => window.navigationTest.reads.length), reads, "double-click uses file.open instead of navigation");
   await focused("left", `${home}/two.txt`); await count("left", 2);
+  assert.match(await cell("left", `${home}/two.txt`).evaluate(element => getComputedStyle(element).color), /0, 170, 255/,
+    "configured name colour remains visible under the keyboard cursor");
   assert.deepEqual(await panel("left").locator(".ag-row.ag-row-selected").evaluateAll(rows => rows.map(row => row.getAttribute("row-id")).sort()),
     [`${home}/one.txt`, `${home}/three.txt`], "double-click does not add the opened file to explicit selection");
   await page.keyboard.press("Control+a"); await count("left", 6);

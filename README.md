@@ -61,6 +61,23 @@ MARTEN_COMMANDER_EDITOR_ARGUMENTS='["--reuse-window", "{file}"]' \
 Изменение применяется при следующем запуске приложения. Команда запускается напрямую,
 без shell: подстановки shell в пути, имени программы и аргументах не выполняются.
 
+## Цвета файлов
+
+При запуске Marten Commander читает `style.yaml` из каталога конфигурации приложения:
+в Linux это `$XDG_CONFIG_HOME/marten-commander/style.yaml`, а по умолчанию
+`~/.config/marten-commander/style.yaml`. Например:
+
+```yaml
+style:
+  - mask: ['*.jpg', '*.jpe', '*.jpeg']
+    color: '#00AAFF'
+  - mask: ['*.zip', '*.7z']
+    color: '#805AD5'
+```
+
+Маски сопоставляются с полным именем файла без учёта регистра. Если подходят
+несколько правил, используется первое. Настройка применяется после перезапуска.
+
 ## Linux release candidate 0.2.0
 
 Workflow [`.github/workflows/linux-build.yml`](.github/workflows/linux-build.yml)

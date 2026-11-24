@@ -47,10 +47,15 @@ func main() {
 	moveService := app.NewMoveService(filesystem, operationManager)
 	operationService := desktop.NewOperationService(operationManager)
 	trashService := app.NewTrashService(localfs.SystemTrash{}, operationManager)
-	profileStore := remotesftp.NewProfileStore(filepath.Join(xdg.ConfigHome, "marten-commander"))
+	configDirectory := filepath.Join(xdg.ConfigHome, "marten-commander")
+	styleConfig, styleConfigError := settings.LoadStyleConfig(filepath.Join(configDirectory, "style.yaml"))
+	if styleConfigError != nil {
+		log.Printf("Не удалось загрузить style.yaml; используется штатное оформление: %v", styleConfigError)
+	}
+	profileStore := remotesftp.NewProfileStore(configDirectory)
 	knownHostsPath := filepath.Join(xdg.Home, ".ssh", "known_hosts")
 	sftpManager := remotesftp.NewManager(profileStore, knownHostsPath)
-	sftpService := desktop.NewSFTPService(profileStore, sftpManager)
+	sftpService := desktop.NewSFTPService(profileStore, sftpManager, styleConfig)
 	downloadService := app.NewDownloadService(sftpManager, filesystem, operationManager)
 	viewerService := desktop.NewViewerService(viewer.LocalFileSource{})
 	var desktopApp *application.App
@@ -64,7 +69,7 @@ func main() {
 	desktopApp = application.New(application.Options{
 		Name: "Marten Commander", Description: "Двухпанельный файловый менеджер",
 		Services: []application.Service{
-			application.NewService(desktop.NewDirectoryService(directories, initialIsHome)),
+			application.NewService(desktop.NewDirectoryService(directories, initialIsHome, styleConfig)),
 			application.NewService(desktop.NewCommandServiceWithRemote(files, editor, copyService, moveService, terminal, trashService, downloadService)),
 			application.NewService(viewerService),
 			application.NewService(viewerWindows),
