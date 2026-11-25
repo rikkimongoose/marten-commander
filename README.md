@@ -87,7 +87,9 @@ style:
 Маски сопоставляются с полным именем файла без учёта регистра. Если подходят
 несколько правил, используется первое. Окрашивается только имя обычного файла в
 локальной или SFTP-панели; каталоги сохраняют штатный вид. Настройка применяется
-после перезапуска.
+после перезапуска. Клавиатурный курсор не меняет цвет маски. Явно выделенная
+строка показывает имя штатным цветом выделенного текста, а после снятия выделения
+цвет маски восстанавливается.
 
 ## Linux release candidate 0.3.0
 
@@ -167,6 +169,11 @@ Go-тесты внутренних пакетов работают незави�
 ```sh
 PLAYWRIGHT_MODULE=/absolute/path/to/playwright-core/index.mjs \
 CHROME_PATH=/absolute/path/to/chrome node tests/browser/navigation.mjs
+# Целевые регрессии фокуса и цветов выделения:
+PLAYWRIGHT_MODULE=/absolute/path/to/playwright-core/index.mjs \
+CHROME_PATH=/absolute/path/to/chrome node tests/browser/focusNavigation.mjs
+PLAYWRIGHT_MODULE=/absolute/path/to/playwright-core/index.mjs \
+CHROME_PATH=/absolute/path/to/chrome node tests/browser/styleSelection.mjs
 ```
 
 Тест проверяет переходы, открытие файлов через Enter/двойной щелчок, ошибку

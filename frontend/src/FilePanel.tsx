@@ -218,7 +218,23 @@ export const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(function Fi
     if (view.focus && activeRef.current &&
       (document.activeElement === document.body || gridRoot.current?.contains(document.activeElement))) {
       if (index === null) gridRoot.current?.focus();
-      else grid.setFocusedCell(index, "name");
+      else {
+        grid.setFocusedCell(index, "name");
+        // setFocusedCell restores AG Grid's logical cursor, but after rowData is
+        // replaced it does not restore the browser focus that owns Arrow keys
+        // and Backspace. A far-away restored row may render one frame after
+        // ensureIndexVisible, so retry once. Every attempt repeats the guard to
+        // prevent a late read from stealing focus from another panel or input.
+        const focusCell = () => {
+          const element = document.activeElement;
+          if (!activeRef.current || element !== document.body && !gridRoot.current?.contains(element)) return true;
+          const cell = gridRoot.current
+            ?.querySelector<HTMLElement>(`.ag-row[row-index="${index}"] .ag-cell[col-id="name"]`);
+          cell?.focus({ preventScroll: true });
+          return !!cell;
+        };
+        if (!focusCell()) requestAnimationFrame(focusCell);
+      }
     }
     setSelectedCount(grid.getSelectedNodes().length);
   }
@@ -362,6 +378,7 @@ export const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(function Fi
         sx={theme => ({ flex: 1, minHeight: 0, outlineOffset: -2,
           "--ag-selected-row-background-color": alpha(theme.palette.error.main, 0.16),
           "& .directory-row": { fontWeight: 600 },
+          "& .ag-row-selected": { "--marten-selected-name-color": theme.palette.error.main },
           "& .ag-row-selected .ag-cell": { color: "error.main" },
           "& .ag-row.cursor-row": { outline: "2px solid", outlineColor: "primary.main", outlineOffset: -2, zIndex: 1 },
           "& .ag-row.cursor-row:not(.ag-row-selected) .ag-cell": { bgcolor: "action.focus" },

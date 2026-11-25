@@ -363,6 +363,8 @@ try {
   // Space keeps AG Grid's selection/cursor behaviour, but captures the local
   // directory under the cursor before the grid can advance it.
   await page.keyboard.press("Space"); await count("left", 1);
+  assert.match(await cell("left", `${home}/child`).evaluate(element => getComputedStyle(element).color), /211, 47, 47/,
+    "an explicitly selected directory name uses the normal selected-text colour");
   assert.deepEqual(await page.evaluate(() => window.navigationTest.directorySizeRequests), [`${home}/child`]);
   await panel("left").locator(`.ag-row[row-id="${home}/child"] .ag-cell[col-id="size"]`).getByText("Считается…").waitFor();
 
@@ -386,8 +388,8 @@ try {
   await focused("left", `${home}/child`);
   assert.match(await cell("left", `${home}/one.txt`).evaluate(element => getComputedStyle(element).color), /211, 47, 47/,
     "explicitly selected rows are red");
-  assert.match(await cell("left", `${home}/two.txt`).evaluate(element => getComputedStyle(element).color), /0, 170, 255/,
-    "configured name colour remains visible under multiple selection");
+  assert.match(await cell("left", `${home}/two.txt`).evaluate(element => getComputedStyle(element).color), /211, 47, 47/,
+    "multiple selection overrides a configured name colour");
   assert.deepEqual(await panel("left").locator(".ag-row.ag-row-selected").evaluateAll(rows => rows.map(row => row.getAttribute("row-id")).sort()),
     [`${home}/one.txt`, `${home}/two.txt`], "Ctrl selects arbitrary rows without moving the cursor");
   await cell("left", `${home}/one.txt`).click();
@@ -414,6 +416,8 @@ try {
   await count("left", 3);
   await cell("left", `${home}/two.txt`).click({ modifiers: ["Control"] }); await count("left", 2);
   await focused("left", `${home}/one.txt`);
+  assert.match(await cell("left", `${home}/two.txt`).evaluate(element => getComputedStyle(element).color), /0, 170, 255/,
+    "deselecting a file restores its configured name colour");
   await cell("left", `${home}/two.txt`).dblclick();
   await page.waitForFunction(count => window.navigationTest.opens.length === count + 2, opens);
   assert.equal(await page.evaluate(() => window.navigationTest.opens.at(-1).params.location), `${home}/two.txt`);
@@ -517,6 +521,12 @@ try {
   await cell("right", `${home}/one.txt`).click({ modifiers: ["Control"] });
   assert.equal(await panel("right").getAttribute("data-active"), "true");
   await focused("right", `${home}/one.txt`); await count("right", 1);
+  await cell("right", `${home}/two.txt`).click({ modifiers: ["Control"] }); await count("right", 2);
+  assert.match(await cell("right", `${home}/two.txt`).evaluate(element => getComputedStyle(element).color), /211, 47, 47/,
+    "the right panel also gives explicit selection priority over a configured colour");
+  await cell("right", `${home}/two.txt`).click({ modifiers: ["Control"] }); await count("right", 1);
+  assert.match(await cell("right", `${home}/two.txt`).evaluate(element => getComputedStyle(element).color), /0, 170, 255/,
+    "the right panel restores the configured colour after deselection");
   await page.waitForFunction(home => document.querySelector('form[aria-label="Командная строка"] p')?.textContent === `${home} >`, home);
   assert.equal(await panel("right").locator(`.ag-row[row-id="${home}/one.txt"]`).getAttribute("aria-selected"), "true");
 
