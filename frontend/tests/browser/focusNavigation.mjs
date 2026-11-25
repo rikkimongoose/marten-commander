@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { createServer } from "vite";
 import react from "@vitejs/plugin-react";
 
-const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || "playwright-core");
+const { chromium, webkit } = await import(process.env.PLAYWRIGHT_MODULE || "playwright-core");
 const server = await createServer({
   configFile: false, root: fileURLToPath(new URL("../../", import.meta.url)), plugins: [react()],
   resolve: { alias: [{ find: /.*bindings\/.*\/desktop\/(commandservice|directoryservice|operationservice|sftpservice|volumeservice|viewerservice|viewerwindowservice)(\.[jt]s)?$/,
@@ -16,13 +16,14 @@ const server = await createServer({
 let browser;
 try {
   await server.listen();
-  browser = await chromium.launch({ executablePath: process.env.CHROME_PATH || "/opt/google/chrome/chrome", headless: true });
+  browser = process.env.FOCUS_BROWSER === "webkit"
+    ? await webkit.launch()
+    : await chromium.launch({ executablePath: process.env.CHROME_PATH || "/opt/google/chrome/chrome", headless: true });
   const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
   await page.goto(server.resolvedUrls.local[0]);
   const home = "/home/test";
   const label = side => side === "left" ? "Левая панель" : "Правая панель";
   const panel = side => page.getByRole("region", { name: label(side) });
-  const cell = (side, id) => panel(side).locator(`.ag-row[row-id="${id}"] .ag-cell[col-id="name"]`);
   const path = (side, value) => panel(side).locator(`[aria-label="Изменить путь: ${label(side)}"][title="${value}"]`).waitFor();
   const focused = (side, id) => page.waitForFunction(({ side, id }) => {
     const region = document.activeElement?.closest('[role="region"]');
@@ -32,12 +33,11 @@ try {
   }, { side, id });
   await path("left", home); await path("right", home);
 
-  // Give both panels the same remembered directory, then exercise switching
-  // and navigation in both directions exclusively through keyboard events.
-  await cell("right", `${home}/child`).click();
-  await cell("left", `${home}/child`).click();
+  // Exercise first entry into each panel without priming DOM focus with a click.
+  await focused("left", "..");
   for (const side of ["right", "left"]) {
-    await page.keyboard.press("Tab"); await focused(side, `${home}/child`);
+    await page.keyboard.press("Tab"); await focused(side, "..");
+    await page.keyboard.press("ArrowDown"); await focused(side, `${home}/child`);
     await page.keyboard.press("Enter"); await path(side, `${home}/child`); await focused(side, "..");
     await page.keyboard.press("ArrowDown"); await focused(side, `${home}/child/nested`);
     await page.keyboard.press("ArrowUp"); await focused(side, "..");

@@ -2,7 +2,7 @@ import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState }
 import { Alert, Box, Button, ButtonBase, Checkbox, FormControlLabel, LinearProgress, TextField, Typography } from "@mui/material";
 import { alpha } from "@mui/material/styles";
 import { AgGridReact } from "ag-grid-react";
-import type { ColDef, GridApi } from "ag-grid-community";
+import type { ColDef, GridApi, RowClassRules } from "ag-grid-community";
 import { CalculateDirectorySize, ReadDirectory } from "../bindings/github.com/rikkimongoose/marten-commander/internal/desktop/directoryservice";
 import { ReadRemoteDirectory } from "../bindings/github.com/rikkimongoose/marten-commander/internal/desktop/sftpservice";
 import type { Directory, HomeDirectory } from "../bindings/github.com/rikkimongoose/marten-commander/internal/desktop/models";
@@ -104,10 +104,11 @@ export const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(function Fi
     setDirectorySizes(previous => ({ ...previous, [location]: status }));
   }), []);
 
-  // AG Grid does not automatically re-evaluate getRowClass when only the
-  // external keyboard-cursor state changes. Redrawing rows updates classes and
-  // preserves row nodes, explicit selection, sorting and scroll position.
-  useEffect(() => { api.current?.redrawRows(); }, [focusedRow]);
+  // Changing the cursor must keep the focused cell mounted during keyboard navigation.
+  const rowClassRules = useMemo<RowClassRules<PanelRow>>(() => ({
+    "directory-row": params => !!params.data?.navigable,
+    "cursor-row": params => focusedRow !== undefined && params.data?.id === focusedRow,
+  }), [focusedRow]);
   useEffect(() => { onContextChange(); }, [directory, focusedRow, onContextChange]);
 
   useImperativeHandle(ref, () => ({
@@ -406,7 +407,7 @@ export const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(function Fi
           focusGridInnerElement={() => { focusList(); return true; }}
           navigateToNextCell={params => params.nextCellPosition?.rowIndex === -1 ? params.previousCellPosition : params.nextCellPosition}
           overlayNoRowsTemplate="<span>Нет видимых файлов</span>"
-          getRowClass={params => [params.data?.navigable && "directory-row", params.data?.id === focusedRow && "cursor-row"].filter(Boolean).join(" ")}
+          rowClassRules={rowClassRules}
           onGridReady={event => { api.current = event.api; }}
           onModelUpdated={event => {
             // Initial empty rowData can emit after the first read completes but
