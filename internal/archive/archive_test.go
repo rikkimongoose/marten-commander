@@ -123,7 +123,7 @@ func TestSessionRejectsConflictingAndInvalidEntries(t *testing.T) {
 		"duplicate":        {{Path: "same", Kind: EntryFile}, {Path: "same", Kind: EntryFile}},
 		"file parent":      {{Path: "parent", Kind: EntryFile}, {Path: "parent/child", Kind: EntryFile}},
 		"name mismatch":    {{Path: "actual", Name: "different", Kind: EntryFile}},
-		"unsupported kind": {{Path: "link", Kind: "symlink"}},
+		"unsupported kind": {{Path: "unknown", Kind: "unknown"}},
 	}
 	for name, entries := range tests {
 		name, entries := name, entries

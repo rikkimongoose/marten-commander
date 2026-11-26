@@ -7,6 +7,7 @@ import (
 	"io"
 	"path"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -16,18 +17,25 @@ type EntryKind string
 const (
 	EntryFile      EntryKind = "file"
 	EntryDirectory EntryKind = "directory"
+	EntrySymlink   EntryKind = "symlink"
+	EntryHardlink  EntryKind = "hardlink"
+	EntrySpecial   EntryKind = "special"
 )
 
-// ArchiveEntry contains format-independent metadata. Nil Size or ModifiedAt
-// means that the archive format did not provide that value. Extra is optional
-// driver-specific, read-only metadata copied by the common session.
+// ArchiveEntry contains format-independent metadata. Path is the canonical
+// virtual path; RawPath preserves the driver-supplied name for extraction
+// safety checks. Nil sizes or ModifiedAt mean the format omitted that value.
+// LinkTarget is diagnostic only: extraction never follows or creates links.
 type ArchiveEntry struct {
-	Path       string
-	Name       string
-	Kind       EntryKind
-	Size       *int64
-	ModifiedAt *time.Time
-	Extra      map[string]string
+	Path           string
+	RawPath        string
+	Name           string
+	Kind           EntryKind
+	Size           *int64
+	CompressedSize *int64
+	ModifiedAt     *time.Time
+	LinkTarget     string
+	Extra          map[string]string
 }
 
 // ArchiveSession is a read-only virtual filesystem. Callers must close every
@@ -82,7 +90,8 @@ func (s *session) buildIndex(ctx context.Context, raw []ArchiveEntry) error {
 		if err != nil {
 			return fmt.Errorf("%w: %w", ErrCorruptArchive, err)
 		}
-		if item.Kind != EntryFile && item.Kind != EntryDirectory {
+		if item.Kind != EntryFile && item.Kind != EntryDirectory && item.Kind != EntrySymlink &&
+			item.Kind != EntryHardlink && item.Kind != EntrySpecial {
 			return pathError(item.Path, fmt.Errorf("%w: kind %q", ErrUnsupportedEntry, item.Kind))
 		}
 		if name == "/" {
@@ -105,9 +114,10 @@ func (s *session) buildIndex(ctx context.Context, raw []ArchiveEntry) error {
 			if existing, exists := s.entries[parent]; exists && existing.Kind != EntryDirectory {
 				return fmt.Errorf("%w: file used as parent at %q", ErrCorruptArchive, parent)
 			}
-			s.entries[parent] = ArchiveEntry{Path: parent, Name: path.Base(parent), Kind: EntryDirectory}
+			s.entries[parent] = ArchiveEntry{Path: parent, RawPath: strings.TrimPrefix(parent, "/"), Name: path.Base(parent), Kind: EntryDirectory}
 		}
-		item.Path, item.Name, item.Extra = name, base, cloneMap(item.Extra)
+		rawPath := item.Path
+		item.Path, item.RawPath, item.Name, item.Extra = name, rawPath, base, cloneMap(item.Extra)
 		if item.Size != nil {
 			size := *item.Size
 			item.Size = &size
@@ -115,6 +125,10 @@ func (s *session) buildIndex(ctx context.Context, raw []ArchiveEntry) error {
 		if item.ModifiedAt != nil {
 			modified := *item.ModifiedAt
 			item.ModifiedAt = &modified
+		}
+		if item.CompressedSize != nil {
+			compressed := *item.CompressedSize
+			item.CompressedSize = &compressed
 		}
 		s.entries[name] = item
 		explicit[name] = true
@@ -202,6 +216,9 @@ func (s *session) Open(ctx context.Context, name string) (io.ReadCloser, error) 
 	}
 	if entry.Kind != EntryFile {
 		s.mu.Unlock()
+		if entry.Kind != EntryDirectory {
+			return nil, pathError(canonical, ErrUnsupportedEntry)
+		}
 		return nil, pathError(canonical, ErrNotFile)
 	}
 	reader, err := s.backend.Open(ctx, canonical)
@@ -337,6 +354,10 @@ func cloneEntry(entry ArchiveEntry) ArchiveEntry {
 	if entry.ModifiedAt != nil {
 		modified := *entry.ModifiedAt
 		entry.ModifiedAt = &modified
+	}
+	if entry.CompressedSize != nil {
+		compressed := *entry.CompressedSize
+		entry.CompressedSize = &compressed
 	}
 	return entry
 }

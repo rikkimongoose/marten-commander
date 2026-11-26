@@ -18,6 +18,11 @@ var (
 	ErrRead              = errors.New("archive: read failed")
 	ErrClosed            = errors.New("archive: session closed")
 	ErrFormatRegistered  = errors.New("archive: format already registered")
+	ErrLimitExceeded     = errors.New("archive: extraction limit exceeded")
+	ErrInvalidMetadata   = errors.New("archive: invalid entry metadata")
+	ErrConflict          = errors.New("archive: destination conflict")
+	ErrUnsafeDestination = errors.New("archive: unsafe extraction destination")
+	ErrExtractionFailed  = errors.New("archive: extraction failed")
 )
 
 // PathError identifies the archive path rejected by an operation.
