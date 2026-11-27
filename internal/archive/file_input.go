@@ -44,3 +44,14 @@ func NewZIPSource(opener InputOpener) *Source {
 	_ = RegisterZIP(registry)
 	return NewSource(opener, registry)
 }
+
+// NewStandardSource constructs an ArchiveSource with all standard-library
+// drivers. TAR.GZ is registered before TAR so compressed inputs are inspected
+// structurally before the plain TAR checksum probe.
+func NewStandardSource(opener InputOpener) *Source {
+	registry := NewRegistry()
+	_ = RegisterZIP(registry)
+	_ = RegisterTARGZ(registry)
+	_ = RegisterTAR(registry)
+	return NewSource(opener, registry)
+}
