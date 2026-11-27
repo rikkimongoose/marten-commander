@@ -49,20 +49,48 @@ type ArchiveSession interface {
 	Close() error
 }
 
-type session struct {
-	mu        sync.Mutex
-	format    Format
-	input     Input
-	backend   BackendSession
-	entries   map[string]ArchiveEntry
-	children  map[string][]string
-	streams   map[*sessionReader]struct{}
-	closed    bool
-	closeErr  error
-	closeDone chan struct{}
+// ArchiveCompressionMetadata is optionally implemented by sessions whose
+// container provides a meaningful archive-wide compressed size but no exact
+// per-entry compressed sizes (notably TAR.GZ).
+type ArchiveCompressionMetadata interface {
+	TotalCompressedSize() *int64
 }
 
-func newSession(ctx context.Context, format Format, input Input, backend BackendSession) (*session, error) {
+// ArchiveBatchSession can stream a set of regular files in archive order.
+// The callback must consume reader before returning and must not retain it.
+// Extractor uses this optional capability to avoid repeated scans of
+// sequential formats while retaining its normal safe publication path.
+type ArchiveBatchSession interface {
+	ArchiveSession
+	ReadFiles(context.Context, []string, func(string, io.Reader) error) error
+}
+
+type backendCompressionMetadata interface {
+	TotalCompressedSize() int64
+}
+
+type backendBatchSession interface {
+	ReadFiles(context.Context, []string, func(string, io.Reader) error) error
+}
+
+type session struct {
+	mu              sync.Mutex
+	format          Format
+	input           Input
+	backend         BackendSession
+	entries         map[string]ArchiveEntry
+	children        map[string][]string
+	streams         map[*sessionReader]struct{}
+	closed          bool
+	closeErr        error
+	closeDone       chan struct{}
+	totalCompressed *int64
+	batchCancels    map[uint64]context.CancelFunc
+	batchWG         sync.WaitGroup
+	nextBatch       uint64
+}
+
+func newSession(ctx context.Context, format Format, input Input, backend BackendSession) (ArchiveSession, error) {
 	raw, err := backend.Entries(ctx)
 	if err != nil {
 		if contextErr := contextError(ctx); contextErr != nil {
@@ -70,14 +98,93 @@ func newSession(ctx context.Context, format Format, input Input, backend Backend
 		}
 		return nil, readError("list entries", err)
 	}
-	result := &session{format: format, input: input, backend: backend, streams: make(map[*sessionReader]struct{})}
+	result := &session{format: format, input: input, backend: backend, streams: make(map[*sessionReader]struct{}),
+		batchCancels: make(map[uint64]context.CancelFunc)}
+	if metadata, ok := backend.(backendCompressionMetadata); ok {
+		value := metadata.TotalCompressedSize()
+		if value < 0 {
+			return nil, ErrInvalidMetadata
+		}
+		result.totalCompressed = &value
+	}
 	if err := result.buildIndex(ctx, raw); err != nil {
 		return nil, err
+	}
+	if batch, ok := backend.(backendBatchSession); ok {
+		return &batchSession{session: result, batch: batch}, nil
 	}
 	return result, nil
 }
 
 func (s *session) Format() Format { return s.format }
+
+func (s *session) TotalCompressedSize() *int64 {
+	if s.totalCompressed == nil {
+		return nil
+	}
+	value := *s.totalCompressed
+	return &value
+}
+
+type batchSession struct {
+	*session
+	batch backendBatchSession
+}
+
+func (s *batchSession) ReadFiles(ctx context.Context, names []string,
+	consume func(string, io.Reader) error) error {
+	if err := contextError(ctx); err != nil {
+		return err
+	}
+	if consume == nil {
+		return fmt.Errorf("%w: nil archive file consumer", ErrInvalidMetadata)
+	}
+	canonical := make([]string, 0, len(names))
+	seen := make(map[string]struct{}, len(names))
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return ErrClosed
+	}
+	for _, name := range names {
+		normalized, err := NormalizePath(name)
+		if err != nil {
+			s.mu.Unlock()
+			return err
+		}
+		entry, exists := s.entries[normalized]
+		if !exists {
+			s.mu.Unlock()
+			return pathError(normalized, ErrEntryNotFound)
+		}
+		if entry.Kind != EntryFile {
+			s.mu.Unlock()
+			if entry.Kind == EntryDirectory {
+				return pathError(normalized, ErrNotFile)
+			}
+			return pathError(normalized, ErrUnsupportedEntry)
+		}
+		if _, duplicate := seen[normalized]; duplicate {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		canonical = append(canonical, normalized)
+	}
+	batchCtx, cancel := context.WithCancel(ctx)
+	id := s.nextBatch
+	s.nextBatch++
+	s.batchCancels[id] = cancel
+	s.batchWG.Add(1)
+	s.mu.Unlock()
+	defer func() {
+		cancel()
+		s.mu.Lock()
+		delete(s.batchCancels, id)
+		s.mu.Unlock()
+		s.batchWG.Done()
+	}()
+	return s.batch.ReadFiles(batchCtx, canonical, consume)
+}
 
 func (s *session) buildIndex(ctx context.Context, raw []ArchiveEntry) error {
 	s.entries = map[string]ArchiveEntry{"/": {Path: "/", Name: "/", Kind: EntryDirectory}}
@@ -257,14 +364,22 @@ func (s *session) Close() error {
 	for stream := range s.streams {
 		streams = append(streams, stream)
 	}
+	cancels := make([]context.CancelFunc, 0, len(s.batchCancels))
+	for _, cancel := range s.batchCancels {
+		cancels = append(cancels, cancel)
+	}
 	s.mu.Unlock()
 
 	var errs []error
+	for _, cancel := range cancels {
+		cancel()
+	}
 	for _, stream := range streams {
 		if err := stream.Close(); err != nil {
 			errs = append(errs, err)
 		}
 	}
+	s.batchWG.Wait()
 	if err := s.backend.Close(); err != nil {
 		errs = append(errs, err)
 	}

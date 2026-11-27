@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"path"
 	"strings"
 	"unicode/utf8"
 
@@ -185,6 +186,9 @@ func (e *Extractor) extract(ctx context.Context, session ArchiveSession, destina
 		}
 	}
 	progressState := newExtractionProgress(plan, progress)
+	if batch, ok := session.(ArchiveBatchSession); ok {
+		return e.extractBatch(ctx, batch, destination, resolver, plan, progressState)
+	}
 	for _, item := range plan {
 		if err := ctx.Err(); err != nil {
 			return failReport(report, item.relative, StageOpen, err)
@@ -232,12 +236,91 @@ func (e *Extractor) extract(ctx context.Context, session ArchiveSession, destina
 	return report, nil
 }
 
+func (e *Extractor) extractBatch(ctx context.Context, session ArchiveBatchSession,
+	destination ExtractionDestination, resolver ExtractionConflictResolver, plan []plannedEntry,
+	progress *extractionProgress) (ExtractionReport, error) {
+	var report ExtractionReport
+	files := make(map[string]plannedEntry)
+	names := make([]string, 0)
+	for _, item := range plan {
+		if err := ctx.Err(); err != nil {
+			return failReport(report, item.relative, StageOpen, err)
+		}
+		if item.entry.Kind == EntryDirectory {
+			if err := destination.EnsureDirectory(ctx, item.relative); err != nil {
+				return failReport(report, item.relative, StagePublish, err)
+			}
+			report.Extracted = append(report.Extracted, item.relative)
+			continue
+		}
+		if item.entry.Kind != EntryFile {
+			return failReport(report, item.relative, StagePlan,
+				pathError(item.entry.RawPath, fmt.Errorf("%w: %s", ErrUnsupportedEntry, item.entry.Kind)))
+		}
+		files[item.entry.Path] = item
+		names = append(names, item.entry.Path)
+	}
+	err := session.ReadFiles(ctx, names, func(name string, input io.Reader) error {
+		item, exists := files[name]
+		if !exists {
+			return fmt.Errorf("%w: unexpected batch entry %q", ErrCorruptArchive, name)
+		}
+		action, expected, skipped, err := chooseConflict(ctx, destination, resolver, item.entry, item.relative)
+		if err != nil {
+			return &ExtractionError{Path: item.relative, Stage: StageConflict, Err: err}
+		}
+		if skipped {
+			if _, err := io.Copy(io.Discard, input); err != nil {
+				return &ExtractionError{Path: item.relative, Stage: StageWrite,
+					Err: readError("skip "+item.entry.Path, err)}
+			}
+			report.Skipped = append(report.Skipped, SkippedEntry{Path: item.relative, Reason: "conflict"})
+			delete(files, name)
+			return nil
+		}
+		written, skipped, err := e.extractOpenedFile(ctx, input, nil, destination, resolver, item, action,
+			expected, &report, progress)
+		if err != nil {
+			return err
+		}
+		if skipped {
+			report.Skipped = append(report.Skipped, SkippedEntry{Path: item.relative, Reason: "conflict"})
+			delete(files, name)
+			return nil
+		}
+		report.BytesWritten, err = addChecked(report.BytesWritten, written, e.limits.MaxTotalSize)
+		if err != nil {
+			return &ExtractionError{Path: item.relative, Stage: StageWrite, Err: err}
+		}
+		report.Extracted = append(report.Extracted, item.relative)
+		if err := progress.published(item.relative, report.BytesWritten); err != nil {
+			return &ExtractionError{Path: item.relative, Stage: StagePublish, Err: err}
+		}
+		delete(files, name)
+		return nil
+	})
+	if err != nil {
+		var extractionErr *ExtractionError
+		if errors.As(err, &extractionErr) {
+			return failReport(report, extractionErr.Path, extractionErr.Stage, extractionErr.Err)
+		}
+		return failReport(report, "", StageOpen, err)
+	}
+	if len(files) != 0 {
+		return failReport(report, "", StageOpen,
+			fmt.Errorf("%w: batch omitted %d files", ErrCorruptArchive, len(files)))
+	}
+	return report, nil
+}
+
 func selectExtractionPlan(plan []plannedEntry, selected []string) ([]plannedEntry, error) {
 	entries := make(map[string]EntryKind, len(plan))
 	for _, item := range plan {
 		entries[item.relative] = item.entry.Kind
 	}
 	targets := make(map[string]EntryKind, len(selected))
+	recursive := make(map[string]struct{})
+	requiredDirectories := make(map[string]struct{})
 	for _, name := range selected {
 		canonical, err := NormalizePath(name)
 		if err != nil {
@@ -252,16 +335,24 @@ func selectExtractionPlan(plan []plannedEntry, selected []string) ([]plannedEntr
 			return nil, pathError(name, ErrEntryNotFound)
 		}
 		targets[relative] = kind
+		if kind == EntryDirectory {
+			recursive[relative] = struct{}{}
+		}
+		for parent := path.Dir(relative); parent != "."; parent = path.Dir(parent) {
+			requiredDirectories[parent] = struct{}{}
+		}
 	}
 	result := make([]plannedEntry, 0, len(plan))
 	for _, item := range plan {
-		include := false
-		for target, kind := range targets {
-			include = item.relative == target ||
-				kind == EntryDirectory && strings.HasPrefix(item.relative, target+"/") ||
-				item.entry.Kind == EntryDirectory && strings.HasPrefix(target, item.relative+"/")
-			if include {
-				break
+		_, include := targets[item.relative]
+		if !include && item.entry.Kind == EntryDirectory {
+			_, include = requiredDirectories[item.relative]
+		}
+		if !include {
+			for parent := path.Dir(item.relative); parent != "."; parent = path.Dir(parent) {
+				if _, include = recursive[parent]; include {
+					break
+				}
 			}
 		}
 		if include {
@@ -334,6 +425,7 @@ type plannedEntry struct {
 func (e *Extractor) buildPlan(ctx context.Context, session ArchiveSession) ([]plannedEntry, error) {
 	plan := make([]plannedEntry, 0)
 	var declaredTotal uint64
+	allFileSizesKnown := true
 	var walk func(string) error
 	walk = func(directory string) error {
 		entries, err := session.ReadDir(ctx, directory)
@@ -373,6 +465,9 @@ func (e *Extractor) buildPlan(ctx context.Context, session ArchiveSession) ([]pl
 				return &ExtractionError{Path: relative, Stage: StagePlan,
 					Err: pathError(raw, fmt.Errorf("%w: %s", ErrUnsupportedEntry, entry.Kind))}
 			}
+			if entry.Kind == EntryFile && entry.Size == nil {
+				allFileSizesKnown = false
+			}
 			if entry.Kind == EntryFile && entry.Size != nil {
 				size := uint64(*entry.Size)
 				if size > e.limits.MaxFileSize {
@@ -398,6 +493,11 @@ func (e *Extractor) buildPlan(ctx context.Context, session ArchiveSession) ([]pl
 	}
 	if err := walk("/"); err != nil {
 		return nil, err
+	}
+	if metadata, ok := session.(ArchiveCompressionMetadata); ok && allFileSizesKnown {
+		if err := checkRatio(declaredTotal, metadata.TotalCompressedSize(), e.limits.MaxExpansionRatio); err != nil {
+			return nil, &ExtractionError{Stage: StagePlan, Err: err}
+		}
 	}
 	return plan, nil
 }
@@ -455,16 +555,27 @@ func (e *Extractor) extractFile(ctx context.Context, session ArchiveSession, des
 	if err != nil {
 		return 0, false, &ExtractionError{Path: item.relative, Stage: StageOpen, Err: err}
 	}
-	inputClosed := false
-	defer func() {
-		if !inputClosed {
-			resultErr = errors.Join(resultErr, input.Close())
+	return e.extractOpenedFile(ctx, input, input.Close, destination, resolver, item, action, expected, report, progress)
+}
+
+func (e *Extractor) extractOpenedFile(ctx context.Context, input io.Reader, closeInput func() error,
+	destination ExtractionDestination, resolver ExtractionConflictResolver, item plannedEntry,
+	action operations.ConflictAction, expected DestinationEntry, report *ExtractionReport,
+	progress *extractionProgress) (written uint64, skipped bool, resultErr error) {
+	inputClosed := closeInput == nil
+	closeReader := func() error {
+		if inputClosed {
+			return nil
 		}
+		inputClosed = true
+		return closeInput()
+	}
+	defer func() {
+		resultErr = errors.Join(resultErr, closeReader())
 	}()
 	temporary, err := destination.CreateTemporary(ctx, item.relative)
 	if err != nil {
-		closeErr := input.Close()
-		inputClosed = true
+		closeErr := closeReader()
 		return 0, false, &ExtractionError{Path: item.relative, Stage: StageOpen, Err: errors.Join(err, closeErr)}
 	}
 	published := false
@@ -514,11 +625,9 @@ func (e *Extractor) extractFile(ctx context.Context, session ArchiveSession, des
 			return written, false, &ExtractionError{Path: item.relative, Stage: StageWrite, Err: io.ErrNoProgress}
 		}
 	}
-	if err := input.Close(); err != nil {
-		inputClosed = true
+	if err := closeReader(); err != nil {
 		return written, false, &ExtractionError{Path: item.relative, Stage: StageWrite, Err: err}
 	}
-	inputClosed = true
 	if err := temporary.Sync(); err != nil {
 		return written, false, &ExtractionError{Path: item.relative, Stage: StageWrite, Err: err}
 	}
