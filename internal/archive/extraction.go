@@ -120,6 +120,11 @@ func (f ExtractionConflictResolverFunc) ResolveExtractionConflict(ctx context.Co
 
 type Extractor struct{ limits ExtractionLimits }
 
+// ExtractionProgress reports bytes streamed into the current temporary file
+// and files that have been safely published. Returning an error stops the
+// operation and preserves the error as its cause.
+type ExtractionProgress func(operations.Progress) error
+
 func NewExtractor(limits ExtractionLimits) (*Extractor, error) {
 	if limits.MaxEntries == 0 || limits.MaxFileSize == 0 || limits.MaxTotalSize == 0 ||
 		limits.MaxDepth == 0 || limits.MaxExpansionRatio == 0 {
@@ -138,6 +143,23 @@ func NewDefaultExtractor() *Extractor {
 // links and never publishes a partial file.
 func (e *Extractor) Extract(ctx context.Context, session ArchiveSession, destination ExtractionDestination,
 	resolver ExtractionConflictResolver) (ExtractionReport, error) {
+	return e.extract(ctx, session, destination, resolver, nil, nil)
+}
+
+// ExtractSelected extracts the named canonical archive paths. Directories are
+// recursive and parent directories needed by selected files are included. The
+// complete archive is still planned and validated before any destination is
+// modified, so selection cannot hide an unsafe raw entry.
+func (e *Extractor) ExtractSelected(ctx context.Context, session ArchiveSession, destination ExtractionDestination,
+	resolver ExtractionConflictResolver, selected []string, progress ExtractionProgress) (ExtractionReport, error) {
+	if len(selected) == 0 {
+		return ExtractionReport{}, fmt.Errorf("%w: extraction selection is empty", ErrInvalidMetadata)
+	}
+	return e.extract(ctx, session, destination, resolver, selected, progress)
+}
+
+func (e *Extractor) extract(ctx context.Context, session ArchiveSession, destination ExtractionDestination,
+	resolver ExtractionConflictResolver, selected []string, progress ExtractionProgress) (ExtractionReport, error) {
 	var report ExtractionReport
 	if ctx == nil {
 		panic("archive: nil context")
@@ -156,6 +178,13 @@ func (e *Extractor) Extract(ctx context.Context, session ArchiveSession, destina
 		}
 		return failReport(report, "", StagePlan, err)
 	}
+	if selected != nil {
+		plan, err = selectExtractionPlan(plan, selected)
+		if err != nil {
+			return failReport(report, "", StagePlan, err)
+		}
+	}
+	progressState := newExtractionProgress(plan, progress)
 	for _, item := range plan {
 		if err := ctx.Err(); err != nil {
 			return failReport(report, item.relative, StageOpen, err)
@@ -179,7 +208,7 @@ func (e *Extractor) Extract(ctx context.Context, session ArchiveSession, destina
 			report.Skipped = append(report.Skipped, SkippedEntry{Path: item.relative, Reason: "conflict"})
 			continue
 		}
-		written, skipped, err := e.extractFile(ctx, session, destination, resolver, item, action, expected, &report)
+		written, skipped, err := e.extractFile(ctx, session, destination, resolver, item, action, expected, &report, progressState)
 		if err != nil {
 			var extractionErr *ExtractionError
 			if errors.As(err, &extractionErr) {
@@ -196,8 +225,105 @@ func (e *Extractor) Extract(ctx context.Context, session ArchiveSession, destina
 			return failReport(report, item.relative, StageWrite, err)
 		}
 		report.Extracted = append(report.Extracted, item.relative)
+		if err := progressState.published(item.relative, report.BytesWritten); err != nil {
+			return failReport(report, item.relative, StagePublish, err)
+		}
 	}
 	return report, nil
+}
+
+func selectExtractionPlan(plan []plannedEntry, selected []string) ([]plannedEntry, error) {
+	entries := make(map[string]EntryKind, len(plan))
+	for _, item := range plan {
+		entries[item.relative] = item.entry.Kind
+	}
+	targets := make(map[string]EntryKind, len(selected))
+	for _, name := range selected {
+		canonical, err := NormalizePath(name)
+		if err != nil {
+			return nil, err
+		}
+		if canonical == "/" {
+			return plan, nil
+		}
+		relative := strings.TrimPrefix(canonical, "/")
+		kind, exists := entries[relative]
+		if !exists {
+			return nil, pathError(name, ErrEntryNotFound)
+		}
+		targets[relative] = kind
+	}
+	result := make([]plannedEntry, 0, len(plan))
+	for _, item := range plan {
+		include := false
+		for target, kind := range targets {
+			include = item.relative == target ||
+				kind == EntryDirectory && strings.HasPrefix(item.relative, target+"/") ||
+				item.entry.Kind == EntryDirectory && strings.HasPrefix(target, item.relative+"/")
+			if include {
+				break
+			}
+		}
+		if include {
+			result = append(result, item)
+		}
+	}
+	return result, nil
+}
+
+type extractionProgress struct {
+	report          ExtractionProgress
+	totalFiles      uint64
+	totalBytes      uint64
+	totalBytesKnown bool
+	processedFiles  uint64
+}
+
+func newExtractionProgress(plan []plannedEntry, report ExtractionProgress) *extractionProgress {
+	state := &extractionProgress{report: report, totalBytesKnown: true}
+	for _, item := range plan {
+		if item.entry.Kind != EntryFile {
+			continue
+		}
+		state.totalFiles++
+		if item.entry.Size == nil {
+			state.totalBytesKnown = false
+			continue
+		}
+		size := uint64(*item.entry.Size)
+		if state.totalBytes > math.MaxUint64-size {
+			state.totalBytesKnown = false
+			continue
+		}
+		state.totalBytes += size
+	}
+	return state
+}
+
+func (p *extractionProgress) streamed(path string, bytes uint64) error {
+	if p == nil || p.report == nil {
+		return nil
+	}
+	return p.report(p.value(path, p.processedFiles, bytes))
+}
+
+func (p *extractionProgress) published(path string, bytes uint64) error {
+	if p == nil {
+		return nil
+	}
+	p.processedFiles++
+	if p.report == nil {
+		return nil
+	}
+	return p.report(p.value(path, p.processedFiles, bytes))
+}
+
+func (p *extractionProgress) value(path string, files, bytes uint64) operations.Progress {
+	progress := operations.Progress{ProcessedFiles: files, TotalFiles: &p.totalFiles, ProcessedBytes: bytes, CurrentFile: path}
+	if p.totalBytesKnown {
+		progress.TotalBytes = &p.totalBytes
+	}
+	return progress
 }
 
 type plannedEntry struct {
@@ -324,7 +450,7 @@ func chooseConflict(ctx context.Context, destination ExtractionDestination, reso
 
 func (e *Extractor) extractFile(ctx context.Context, session ArchiveSession, destination ExtractionDestination,
 	resolver ExtractionConflictResolver, item plannedEntry, action operations.ConflictAction, expected DestinationEntry,
-	report *ExtractionReport) (written uint64, skipped bool, resultErr error) {
+	report *ExtractionReport, progress *extractionProgress) (written uint64, skipped bool, resultErr error) {
 	input, err := session.Open(ctx, item.entry.Path)
 	if err != nil {
 		return 0, false, &ExtractionError{Path: item.relative, Stage: StageOpen, Err: err}
@@ -373,6 +499,9 @@ func (e *Extractor) extractFile(ctx context.Context, session ArchiveSession, des
 			}
 			if amount != count {
 				return written, false, &ExtractionError{Path: item.relative, Stage: StageWrite, Err: io.ErrShortWrite}
+			}
+			if err := progress.streamed(item.relative, report.BytesWritten+written); err != nil {
+				return written, false, &ExtractionError{Path: item.relative, Stage: StageWrite, Err: err}
 			}
 		}
 		if errors.Is(readErr, io.EOF) {
